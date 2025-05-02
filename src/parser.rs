@@ -11,8 +11,10 @@ pub enum TokenizeError {
 impl Display for TokenizeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
-            TokenizeError::InvalidTagName(ch) => format!("{} is not a valid tag name", ch),
-            TokenizeError::InvalidTagAttrName(ch) => format!("{} is not a valid tag attr name", ch),
+            TokenizeError::InvalidTagName(name) => format!("{} is not a valid tag name", name),
+            TokenizeError::InvalidTagAttrName(name) => {
+                format!("{} is not a valid tag attr name", name)
+            }
         };
 
         write!(f, "tokenize error. ({})", message)
