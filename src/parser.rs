@@ -30,14 +30,18 @@ enum TokenizerState {
     EndTagOpen,
     IgnoreUntilGt,
     BeforeTagAttr,
+    BeforeTagValue,
     AfterTagAttr,
+    AfterTagValue,
     TagAttr,
+    TagValue,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
     OpenTag(String),
     TagAttr(String),
+    TagValue(String),
     Text { content: String, ignore_hint: bool },
     CloseTag(String),
 }
@@ -91,6 +95,7 @@ pub struct Tokenizer<'a> {
     is_end_tag: bool,
     tag_name: String,
     tag_attr_name: String,
+    tag_value: String,
     text: String,
     re_for_tag_name: Regex,
     tokens: Vec<Token>,
@@ -108,6 +113,7 @@ impl<'a> Tokenizer<'a> {
             is_end_tag: false,
             tag_name: String::new(),
             tag_attr_name: String::new(),
+            tag_value: String::new(),
             text: String::new(),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
@@ -125,8 +131,11 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
                 TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
+                TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
                 TokenizerState::AfterTagAttr => self.handle_after_tag_attr(ch)?,
+                TokenizerState::AfterTagValue => self.handle_after_tag_value(ch)?,
                 TokenizerState::TagAttr => self.handle_tag_attr(ch)?,
+                TokenizerState::TagValue => self.handle_tag_value(ch)?,
             }
         }
 
@@ -146,7 +155,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '>' || ch.is_whitespace() {
+        if ch == '>' || ch == '=' || ch.is_whitespace() {
             let tag_attr_name = mem::take(&mut self.tag_attr_name);
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
                 return Err(WithPos::new(
@@ -157,6 +166,8 @@ impl<'a> Tokenizer<'a> {
             self.tokens.push(Token::TagAttr(tag_attr_name));
             self.state = if ch == '>' {
                 TokenizerState::Data
+            } else if ch == '=' {
+                TokenizerState::BeforeTagValue
             } else {
                 TokenizerState::AfterTagAttr
             };
@@ -189,11 +200,59 @@ impl<'a> Tokenizer<'a> {
             '>' => {
                 self.state = TokenizerState::Data;
             }
+            '=' => {
+                self.state = TokenizerState::BeforeTagValue;
+            }
             ch if !ch.is_whitespace() => {
                 self.tag_attr_name.push(ch);
                 self.state = TokenizerState::TagAttr;
             }
             _ => {}
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn handle_before_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '"' => {}
+            ch => {
+                if !ch.is_whitespace() {
+                    self.tag_value.push(ch);
+                    self.state = TokenizerState::TagValue;
+                }
+            }
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '"' {
+            let tag_value = mem::take(&mut self.tag_value);
+            self.tokens.push(Token::TagValue(tag_value));
+            self.state = TokenizerState::AfterTagValue;
+        } else {
+            self.tag_value.push(ch);
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '>' => {
+                self.state = TokenizerState::Data;
+            }
+            ch => {
+                if !ch.is_whitespace() {
+                    self.tag_attr_name.push(ch);
+                    self.state = TokenizerState::TagAttr;
+                }
+            }
         }
 
         self.advance();
@@ -438,8 +497,7 @@ mod tests {
     #[test]
     fn test_tag_with_multi_tag_attrs() {
         assert_eq!(
-            Tokenizer::new("<tag attr1 attr2>content</tag><tag attr1 attr2>content</tag>")
-                .tokenize(),
+            Tokenizer::new("<tag attr1 attr2></tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag("tag".to_owned()),
                 Token::TagAttr("attr1".to_owned()),
@@ -457,6 +515,45 @@ mod tests {
                 TokenizeError::InvalidTagAttrName("3attr".to_owned()),
                 Pos { row: 0, col: 10 }
             ))
+        );
+    }
+
+    #[test]
+    fn test_tag_with_attr_and_value() {
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr="value"></tag>"#).tokenize(),
+            Ok(vec![
+                Token::OpenTag("tag".to_owned()),
+                Token::TagAttr("attr".to_owned()),
+                Token::TagValue("value".to_owned()),
+                Token::CloseTag("tag".to_owned())
+            ])
+        );
+
+        // allow space between tag attr name and it's value
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr         = "value"></tag>"#).tokenize(),
+            Ok(vec![
+                Token::OpenTag("tag".to_owned()),
+                Token::TagAttr("attr".to_owned()),
+                Token::TagValue("value".to_owned()),
+                Token::CloseTag("tag".to_owned())
+            ])
+        );
+    }
+
+    #[test]
+    fn test_tag_with_multiple_attr_and_values() {
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr1="value1" attr2 = "value2"></tag>"#).tokenize(),
+            Ok(vec![
+                Token::OpenTag("tag".to_owned()),
+                Token::TagAttr("attr1".to_owned()),
+                Token::TagValue("value1".to_owned()),
+                Token::TagAttr("attr2".to_owned()),
+                Token::TagValue("value2".to_owned()),
+                Token::CloseTag("tag".to_owned())
+            ])
         );
     }
 }
