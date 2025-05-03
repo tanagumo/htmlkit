@@ -1,15 +1,15 @@
 use regex::Regex;
-use std::{error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Chars};
+use std::{borrow::Cow, error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Chars};
 
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum TokenizeError {
-    InvalidTagName(String),
-    InvalidTagAttrName(String),
-    MalformedEndTag(String),
+pub enum TokenizeError<'a> {
+    InvalidTagName(Cow<'a, str>),
+    InvalidTagAttrName(Cow<'a, str>),
+    MalformedEndTag(Cow<'a, str>),
 }
 
-impl Display for TokenizeError {
+impl<'a> Display for TokenizeError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
             TokenizeError::InvalidTagName(name) => format!("{} is not a valid tag name", name),
@@ -23,7 +23,7 @@ impl Display for TokenizeError {
     }
 }
 
-impl StdError for TokenizeError {}
+impl<'a> StdError for TokenizeError<'a> {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TokenizerState {
@@ -107,7 +107,7 @@ pub struct Tokenizer<'a> {
     pos: Pos,
 }
 
-type TokenizeResult<T> = Result<T, WithPos<TokenizeError>>;
+type TokenizeResult<T> = Result<T, WithPos<TokenizeError<'static>>>;
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
@@ -165,7 +165,7 @@ impl<'a> Tokenizer<'a> {
             let tag_attr_name = mem::take(&mut self.tag_attr_name);
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
                 return Err(WithPos::new(
-                    TokenizeError::InvalidTagAttrName(tag_attr_name),
+                    TokenizeError::InvalidTagAttrName(Cow::Owned(tag_attr_name)),
                     self.pos,
                 ));
             }
@@ -317,7 +317,10 @@ impl<'a> Tokenizer<'a> {
         if ch == '>' || ch.is_whitespace() {
             let tag = mem::take(&mut self.tag_name);
             if let None = self.re_for_tag_name.captures(&tag) {
-                return Err(WithPos::new(TokenizeError::InvalidTagName(tag), self.pos));
+                return Err(WithPos::new(
+                    TokenizeError::InvalidTagName(Cow::Owned(tag)),
+                    self.pos,
+                ));
             }
             if self.is_end_tag {
                 self.tokens.push(Token::CloseTag(tag));
@@ -375,7 +378,7 @@ impl<'a> Tokenizer<'a> {
             _ => {
                 if !ch.is_whitespace() {
                     return Err(WithPos::new(
-                        TokenizeError::MalformedEndTag("end tag can only have name".to_owned()),
+                        TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
                         self.pos,
                     ));
                 }
@@ -483,7 +486,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<2a></tag>").tokenize(),
             Err(WithPos::new(
-                TokenizeError::InvalidTagName("2a".to_owned()),
+                TokenizeError::InvalidTagName(Cow::Borrowed("2a")),
                 Pos { row: 0, col: 3 }
             ))
         );
@@ -491,7 +494,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag></3b>").tokenize(),
             Err(WithPos::new(
-                TokenizeError::InvalidTagName("3b".to_owned()),
+                TokenizeError::InvalidTagName(Cow::Borrowed("3b")),
                 Pos { row: 0, col: 9 }
             ))
         );
@@ -502,7 +505,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag>\n</999999a>").tokenize(),
             Err(WithPos::new(
-                TokenizeError::InvalidTagName("999999a".to_owned()),
+                TokenizeError::InvalidTagName(Cow::Borrowed("999999a")),
                 Pos { row: 1, col: 9 }
             ))
         );
@@ -538,7 +541,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag 3attr></tag>").tokenize(),
             Err(WithPos::new(
-                TokenizeError::InvalidTagAttrName("3attr".to_owned()),
+                TokenizeError::InvalidTagAttrName(Cow::Borrowed("3attr")),
                 Pos { row: 0, col: 10 }
             ))
         );
@@ -588,7 +591,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag attr1=\"value1\">line1\nline2</tag attr>").tokenize(),
             Err(WithPos::new(
-                TokenizeError::MalformedEndTag("end tag can only have name".to_owned()),
+                TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
                 Pos { row: 1, col: 11 }
             ))
         );
