@@ -6,6 +6,7 @@ use std::{error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Char
 pub enum TokenizeError {
     InvalidTagName(String),
     InvalidTagAttrName(String),
+    MalformedEndTag(String),
 }
 
 impl Display for TokenizeError {
@@ -15,6 +16,7 @@ impl Display for TokenizeError {
             TokenizeError::InvalidTagAttrName(name) => {
                 format!("{} is not a valid tag attr name", name)
             }
+            TokenizeError::MalformedEndTag(reason) => format!("malformed end tag. ({})", reason),
         };
 
         write!(f, "tokenize error. ({})", message)
@@ -33,6 +35,7 @@ enum TokenizerState {
     IgnoreUntilGt,
     BeforeTagAttr,
     BeforeTagValue,
+    AfterEndTagName,
     AfterTagAttr,
     AfterTagValue,
     TagAttr,
@@ -134,6 +137,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
                 TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
+                TokenizerState::AfterEndTagName => self.handle_after_tag_name(ch)?,
                 TokenizerState::AfterTagAttr => self.handle_after_tag_attr(ch)?,
                 TokenizerState::AfterTagValue => self.handle_after_tag_value(ch)?,
                 TokenizerState::TagAttr => self.handle_tag_attr(ch)?,
@@ -322,6 +326,8 @@ impl<'a> Tokenizer<'a> {
             }
             self.state = if ch == '>' {
                 TokenizerState::Data
+            } else if self.is_end_tag {
+                TokenizerState::AfterEndTagName
             } else {
                 TokenizerState::BeforeTagAttr
             };
@@ -358,6 +364,24 @@ impl<'a> Tokenizer<'a> {
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '>' => {
+                self.state = TokenizerState::Data;
+            }
+            _ => {
+                if !ch.is_whitespace() {
+                    return Err(WithPos::new(
+                        TokenizeError::MalformedEndTag("end tag can only have name".to_owned()),
+                        self.pos,
+                    ));
+                }
+            }
+        }
+        self.advance();
         Ok(())
     }
 }
@@ -556,6 +580,17 @@ mod tests {
                 Token::TagValue("value2".to_owned()),
                 Token::CloseTag("tag".to_owned())
             ])
+        );
+    }
+
+    #[test]
+    fn test_malformed_end_tag() {
+        assert_eq!(
+            Tokenizer::new("<tag attr1=\"value1\">line1\nline2</tag attr>").tokenize(),
+            Err(WithPos::new(
+                TokenizeError::MalformedEndTag("end tag can only have name".to_owned()),
+                Pos { row: 1, col: 11 }
+            ))
         );
     }
 }
