@@ -514,6 +514,30 @@ impl<'a> Tokenizer<'a> {
     fn peek(&mut self) -> Option<char> {
         self.src.peek().map(|ch| *ch)
     }
+
+    fn starts_with(&self, target: &str) -> bool {
+        if target.is_empty() {
+            return true;
+        }
+
+        let mut cloned = self.src.clone();
+
+        let mut ret = true;
+        for ch in target.chars() {
+            if let Some(&v) = cloned.peek() {
+                if v != ch {
+                    ret = false;
+                    break;
+                } else {
+                    cloned.next();
+                }
+            } else {
+                ret = false;
+                break;
+            }
+        }
+        ret
+    }
 }
 
 #[cfg(test)]
@@ -888,5 +912,16 @@ mod tests {
                 Pos { row: 0, col: 34 }
             ))
         );
+    }
+
+    #[test]
+    fn test_starts_with() {
+        let tokenizer = Tokenizer::new("t123");
+        assert_eq!(tokenizer.starts_with(""), true);
+        assert_eq!(tokenizer.starts_with("t"), true);
+        assert_eq!(tokenizer.starts_with("t1"), true);
+        assert_eq!(tokenizer.starts_with("t12"), true);
+        assert_eq!(tokenizer.starts_with("t123"), true);
+        assert_eq!(tokenizer.starts_with("t1234"), false);
     }
 }
