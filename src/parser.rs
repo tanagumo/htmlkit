@@ -27,23 +27,6 @@ impl<'a> Display for TokenizeError<'a> {
 
 impl<'a> StdError for TokenizeError<'a> {}
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TokenizerState {
-    BeforeFirstTag,
-    TagOpen,
-    TagName,
-    Data,
-    EndTagOpen,
-    IgnoreUntilGt,
-    BeforeTagAttr,
-    BeforeTagValue,
-    AfterEndTagName,
-    AfterTagAttr,
-    AfterTagValue,
-    TagAttr,
-    TagValue,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct TagAttr {
     name: String,
@@ -147,6 +130,23 @@ impl<T: Display> Display for WithPos<T> {
 }
 
 impl<T: StdError + Send + Sync + 'static> StdError for WithPos<T> {}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TokenizerState {
+    BeforeFirstTag,
+    TagOpen,
+    TagName,
+    Data,
+    EndTagOpen,
+    IgnoreUntilGt,
+    BeforeTagAttr,
+    BeforeTagValue,
+    AfterEndTagName,
+    AfterTagAttr,
+    AfterTagValue,
+    TagAttr,
+    TagValue,
+}
 
 #[derive(Debug)]
 pub struct Tokenizer<'a> {
