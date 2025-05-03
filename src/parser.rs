@@ -95,7 +95,7 @@ impl OpenTagBuilder {
 pub enum Token {
     OpenTag(OpenTag),
     Comment(String),
-    Text { content: String, ignore_hint: bool },
+    Text(String),
     CloseTag(String),
 }
 
@@ -449,10 +449,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
         if !self.text.is_empty() {
-            self.tokens.push(Token::Text {
-                content: mem::take(&mut self.text),
-                ignore_hint: false,
-            });
+            self.tokens.push(Token::Text(mem::take(&mut self.text)));
         }
 
         if ch == '!' {
@@ -571,10 +568,7 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::Text {
-                    content: "abc>hoge".to_owned(),
-                    ignore_hint: false
-                },
+                Token::Text("abc>hoge".to_owned()),
                 Token::CloseTag("tag".to_owned())
             ])
         );
@@ -590,15 +584,9 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::Text {
-                    content: "before ".to_owned(),
-                    ignore_hint: false
-                },
+                Token::Text("before ".to_owned()),
                 Token::Comment(" comment ".to_owned()),
-                Token::Text {
-                    content: " after".to_owned(),
-                    ignore_hint: false
-                },
+                Token::Text(" after".to_owned()),
                 Token::CloseTag("tag".to_owned()),
             ])
         );
