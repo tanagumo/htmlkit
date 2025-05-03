@@ -999,4 +999,99 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_html() {
+        let html = r#"
+<!doctype html>
+<html>
+<head>
+<title>test html</title>
+</head>
+<body>
+<p>this is p tag</p>
+<!--
+comment start 
+<div attr1 attr2="value2">this div in a comment</div>
+-->
+<img src="test" />
+<custom attr1></custom>
+</body>
+</html>
+        "#
+        .trim();
+
+        fn new_line_text() -> Token {
+            Token::Text("\n".to_owned())
+        }
+        assert_eq!(
+            Tokenizer::new(html).tokenize(),
+            Ok(vec![
+                Token::DocTypeTag,
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "html".to_owned(),
+                    tag_attrs: vec![],
+                    self_closing: false
+                }),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "head".to_owned(),
+                    tag_attrs: vec![],
+                    self_closing: false
+                }),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "title".to_owned(),
+                    tag_attrs: vec![],
+                    self_closing: false
+                }),
+                Token::Text("test html".to_owned()),
+                Token::CloseTag("title".to_owned()),
+                new_line_text(),
+                Token::CloseTag("head".to_owned()),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "body".to_owned(),
+                    tag_attrs: vec![],
+                    self_closing: false
+                }),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "p".to_owned(),
+                    tag_attrs: vec![],
+                    self_closing: false
+                }),
+                Token::Text("this is p tag".to_owned()),
+                Token::CloseTag("p".to_owned()),
+                new_line_text(),
+                Token::Comment(
+                    "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n"
+                        .to_owned()
+                ),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "img".to_owned(),
+                    tag_attrs: vec![TagAttr {
+                        name: "src".to_owned(),
+                        value: Some("test".to_owned()),
+                    }],
+                    self_closing: true
+                }),
+                new_line_text(),
+                Token::OpenTag(OpenTag {
+                    name: "custom".to_owned(),
+                    tag_attrs: vec![TagAttr {
+                        name: "attr1".to_owned(),
+                        value: None,
+                    }],
+                    self_closing: false
+                }),
+                Token::CloseTag("custom".to_owned()),
+                new_line_text(),
+                Token::CloseTag("body".to_owned()),
+                new_line_text(),
+                Token::CloseTag("html".to_owned()),
+            ]),
+        );
+    }
 }
