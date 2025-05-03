@@ -10,6 +10,7 @@ pub enum TokenizeError<'a> {
     MalformedSelfClosingTag(Cow<'a, str>),
     MalformedTagAttr(Cow<'a, str>),
     MalformedCommentTag,
+    MalformedDocTypeTag,
 }
 
 impl<'a> Display for TokenizeError<'a> {
@@ -25,6 +26,7 @@ impl<'a> Display for TokenizeError<'a> {
             }
             TokenizeError::MalformedTagAttr(reason) => format!("{}", reason),
             TokenizeError::MalformedCommentTag => format!("malformed comment tag"),
+            TokenizeError::MalformedDocTypeTag => format!("malformed doctype tag"),
         };
 
         write!(f, "tokenize error. ({})", message)
@@ -97,6 +99,7 @@ pub enum Token {
     Comment(String),
     Text(String),
     CloseTag(String),
+    DocTypeTag,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -148,6 +151,7 @@ enum TokenizerState {
     BeforeTagAttr,
     BeforeTagValue,
     Comment,
+    DocType,
     DocTypeOrComment,
     EndTagOpen,
     SelfClosingTagSlash,
@@ -203,6 +207,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
                 TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
                 TokenizerState::Comment => self.handle_comment(ch)?,
+                TokenizerState::DocType => self.handle_doc_type(ch)?,
                 TokenizerState::DocTypeOrComment => self.handle_before_doc_type_or_comment(ch)?,
                 TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
                 TokenizerState::SelfClosingTagSlash => self.handle_self_closing_tag_slash(ch)?,
@@ -333,6 +338,15 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
+    fn handle_doc_type(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '>' {
+            self.tokens.push(Token::DocTypeTag);
+            self.state = TokenizerState::Text;
+        }
+        self.advance();
+        Ok(())
+    }
+
     fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<()> {
         if self.starts_with("-") {
             if !self.starts_with("--") {
@@ -343,7 +357,13 @@ impl<'a> Tokenizer<'a> {
             self.advance();
             self.state = TokenizerState::Comment;
         } else {
-            unimplemented!("doctype is not yet implemented");
+            if !self.starts_with_case_insensitive("DOCTYPE") {
+                return Err(WithPos::new(TokenizeError::MalformedDocTypeTag, self.pos));
+            }
+            self.state = TokenizerState::DocType;
+            for _ in 0..7 {
+                self.advance();
+            }
         }
         Ok(())
     }
@@ -525,6 +545,30 @@ impl<'a> Tokenizer<'a> {
         for ch in target.chars() {
             if let Some(&v) = cloned.peek() {
                 if v != ch {
+                    ret = false;
+                    break;
+                } else {
+                    cloned.next();
+                }
+            } else {
+                ret = false;
+                break;
+            }
+        }
+        ret
+    }
+
+    fn starts_with_case_insensitive(&self, target: &str) -> bool {
+        if target.is_empty() {
+            return true;
+        }
+
+        let mut cloned = self.src.clone();
+
+        let mut ret = true;
+        for ch in target.chars() {
+            if let Some(&v) = cloned.peek() {
+                if v.to_lowercase().collect::<String>() != ch.to_lowercase().collect::<String>() {
                     ret = false;
                     break;
                 } else {
@@ -916,4 +960,39 @@ mod tests {
             ))
         );
     }
+
+    #[test]
+    fn test_doc_type_tag() {
+        assert_eq!(
+            Tokenizer::new("<!doctype>").tokenize(),
+            Ok(vec![Token::DocTypeTag]),
+        );
+
+        // allow case insensitive "doctype"
+        assert_eq!(
+            Tokenizer::new("<!Doctype>").tokenize(),
+            Ok(vec![Token::DocTypeTag]),
+        );
+
+        assert_eq!(
+            Tokenizer::new("test1<!Doctype>test2").tokenize(),
+            Ok(vec![
+                Token::Text("test1".to_owned()),
+                Token::DocTypeTag,
+                Token::Text("test2".to_owned()),
+            ]),
+        );
+    }
+
+    #[test]
+    fn test_malformed_doc_type_tag() {
+        assert_eq!(
+            Tokenizer::new("<!doctyp>").tokenize(),
+            Err(WithPos::new(
+                TokenizeError::MalformedDocTypeTag,
+                Pos { row: 0, col: 2 }
+            ))
+        );
+    }
+
 }
