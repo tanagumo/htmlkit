@@ -133,18 +133,18 @@ impl<T: StdError + Send + Sync + 'static> StdError for WithPos<T> {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TokenizerState {
-    BeforeFirstTag,
-    TagOpen,
-    TagName,
-    Data,
-    EndTagOpen,
-    IgnoreUntilGt,
-    BeforeTagAttr,
-    BeforeTagValue,
     AfterEndTagName,
     AfterTagAttr,
     AfterTagValue,
+    BeforeFirstTag,
+    BeforeTagAttr,
+    BeforeTagValue,
+    Data,
+    EndTagOpen,
+    IgnoreUntilGt,
     TagAttr,
+    TagName,
+    TagOpen,
     TagValue,
 }
 
@@ -187,18 +187,18 @@ impl<'a> Tokenizer<'a> {
     pub fn tokenize(mut self) -> TokenizeResult<Vec<Token>> {
         while let Some(ch) = self.peek() {
             match self.state {
-                TokenizerState::BeforeFirstTag => self.handle_before_first_tag(ch)?,
-                TokenizerState::TagOpen => self.handle_tag_open(ch)?,
-                TokenizerState::TagName => self.handle_tag_name(ch)?,
-                TokenizerState::Data => self.handle_data(ch)?,
-                TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
-                TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
-                TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
-                TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
                 TokenizerState::AfterEndTagName => self.handle_after_tag_name(ch)?,
                 TokenizerState::AfterTagAttr => self.handle_after_tag_attr(ch)?,
                 TokenizerState::AfterTagValue => self.handle_after_tag_value(ch)?,
+                TokenizerState::BeforeFirstTag => self.handle_before_first_tag(ch)?,
+                TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
+                TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
+                TokenizerState::Data => self.handle_data(ch)?,
+                TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
+                TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
                 TokenizerState::TagAttr => self.handle_tag_attr(ch)?,
+                TokenizerState::TagName => self.handle_tag_name(ch)?,
+                TokenizerState::TagOpen => self.handle_tag_open(ch)?,
                 TokenizerState::TagValue => self.handle_tag_value(ch)?,
             }
         }
@@ -206,66 +206,20 @@ impl<'a> Tokenizer<'a> {
         Ok(self.tokens)
     }
 
-    fn advance(&mut self) {
-        if let Some('\n') = self.src.next() {
-            self.pos.break_line();
-        } else {
-            self.pos.advance();
-        }
-    }
-
-    fn peek(&mut self) -> Option<char> {
-        self.src.peek().map(|ch| *ch)
-    }
-
-    fn finalize_open_tag(&mut self) {
-        if let Some(builder) = self.open_tag_builder.take() {
-            self.tokens.push(Token::OpenTag(builder.build()));
-        }
-    }
-
-    fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '>' || ch == '=' || ch.is_whitespace() {
-            let tag_attr_name = mem::take(&mut self.tag_attr_name);
-            if let None = self.re_for_tag_name.captures(&tag_attr_name) {
-                return Err(WithPos::new(
-                    TokenizeError::InvalidTagAttrName(Cow::Owned(tag_attr_name)),
-                    self.pos,
-                ));
-            }
-            self.open_tag_builder
-                .as_mut()
-                .unwrap()
-                .add_attr_name(tag_attr_name);
-            self.state = if ch == '>' {
-                self.finalize_open_tag();
-                TokenizerState::Data
-            } else if ch == '=' {
-                TokenizerState::BeforeTagValue
-            } else {
-                TokenizerState::AfterTagAttr
-            };
-        } else {
-            self.tag_attr_name.push(ch);
-        }
-
-        self.advance();
-        Ok(())
-    }
-
-    fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
-                self.finalize_open_tag();
                 self.state = TokenizerState::Data;
             }
-            ch if !ch.is_whitespace() => {
-                self.tag_attr_name.push(ch);
-                self.state = TokenizerState::TagAttr;
+            _ => {
+                if !ch.is_whitespace() {
+                    return Err(WithPos::new(
+                        TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
+                        self.pos,
+                    ));
+                }
             }
-            _ => {}
         }
-
         self.advance();
         Ok(())
     }
@@ -278,6 +232,55 @@ impl<'a> Tokenizer<'a> {
             }
             '=' => {
                 self.state = TokenizerState::BeforeTagValue;
+            }
+            ch if !ch.is_whitespace() => {
+                self.tag_attr_name.push(ch);
+                self.state = TokenizerState::TagAttr;
+            }
+            _ => {}
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '>' => {
+                self.finalize_open_tag();
+                self.state = TokenizerState::Data;
+            }
+            ch => {
+                if !ch.is_whitespace() {
+                    self.tag_attr_name.push(ch);
+                    self.state = TokenizerState::TagAttr;
+                }
+            }
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn handle_before_first_tag(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '<' {
+            self.state = TokenizerState::TagOpen;
+        }
+        self.advance();
+
+        if let Some('!') = self.peek() {
+            self.text.push('<');
+            self.state_before_ignore = TokenizerState::BeforeFirstTag;
+            self.state = TokenizerState::IgnoreUntilGt;
+        }
+        Ok(())
+    }
+
+    fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '>' => {
+                self.finalize_open_tag();
+                self.state = TokenizerState::Data;
             }
             ch if !ch.is_whitespace() => {
                 self.tag_attr_name.push(ch);
@@ -305,37 +308,37 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '"' {
-            let tag_value = mem::take(&mut self.tag_value);
-            self.open_tag_builder
-                .as_mut()
-                .unwrap()
-                .set_attr_value(tag_value)
-                .map_err(|e| WithPos::new(e, self.pos))?;
-            self.state = TokenizerState::AfterTagValue;
+    fn handle_data(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch != '<' {
+            self.text.push(ch);
+            self.advance();
         } else {
-            self.tag_value.push(ch);
-        }
+            self.advance();
 
-        self.advance();
+            match self.peek() {
+                Some('!') => {
+                    self.text.push('<');
+                    self.state_before_ignore = self.state;
+                    self.state = TokenizerState::IgnoreUntilGt;
+                }
+                Some(_) => {
+                    self.state = TokenizerState::TagOpen;
+                    if !self.text.is_empty() {
+                        self.tokens.push(Token::Text {
+                            content: mem::take(&mut self.text),
+                            ignore_hint: false,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
-    fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
-        match ch {
-            '>' => {
-                self.finalize_open_tag();
-                self.state = TokenizerState::Data;
-            }
-            ch => {
-                if !ch.is_whitespace() {
-                    self.tag_attr_name.push(ch);
-                    self.state = TokenizerState::TagAttr;
-                }
-            }
-        }
-
+    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
+        self.state = TokenizerState::TagName;
+        self.tag_name.push(ch);
         self.advance();
         Ok(())
     }
@@ -354,36 +357,31 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_before_first_tag(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '<' {
-            self.state = TokenizerState::TagOpen;
-        }
-        self.advance();
-
-        if let Some('!') = self.peek() {
-            self.text.push('<');
-            self.state_before_ignore = TokenizerState::BeforeFirstTag;
-            self.state = TokenizerState::IgnoreUntilGt;
-        }
-        Ok(())
-    }
-
-    fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '/' {
-            self.state = TokenizerState::EndTagOpen;
-            self.is_end_tag = true;
+    fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '>' || ch == '=' || ch.is_whitespace() {
+            let tag_attr_name = mem::take(&mut self.tag_attr_name);
+            if let None = self.re_for_tag_name.captures(&tag_attr_name) {
+                return Err(WithPos::new(
+                    TokenizeError::InvalidTagAttrName(Cow::Owned(tag_attr_name)),
+                    self.pos,
+                ));
+            }
+            self.open_tag_builder
+                .as_mut()
+                .unwrap()
+                .add_attr_name(tag_attr_name);
+            self.state = if ch == '>' {
+                self.finalize_open_tag();
+                TokenizerState::Data
+            } else if ch == '=' {
+                TokenizerState::BeforeTagValue
+            } else {
+                TokenizerState::AfterTagAttr
+            };
         } else {
-            self.state = TokenizerState::TagName;
-            self.tag_name.push(ch);
-            self.is_end_tag = false;
+            self.tag_attr_name.push(ch);
         }
-        self.advance();
-        Ok(())
-    }
 
-    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
-        self.state = TokenizerState::TagName;
-        self.tag_name.push(ch);
         self.advance();
         Ok(())
     }
@@ -426,50 +424,52 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_data(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch != '<' {
-            self.text.push(ch);
-            self.advance();
+    fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '/' {
+            self.state = TokenizerState::EndTagOpen;
+            self.is_end_tag = true;
         } else {
-            self.advance();
-
-            match self.peek() {
-                Some('!') => {
-                    self.text.push('<');
-                    self.state_before_ignore = self.state;
-                    self.state = TokenizerState::IgnoreUntilGt;
-                }
-                Some(_) => {
-                    self.state = TokenizerState::TagOpen;
-                    if !self.text.is_empty() {
-                        self.tokens.push(Token::Text {
-                            content: mem::take(&mut self.text),
-                            ignore_hint: false,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
-        match ch {
-            '>' => {
-                self.state = TokenizerState::Data;
-            }
-            _ => {
-                if !ch.is_whitespace() {
-                    return Err(WithPos::new(
-                        TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                        self.pos,
-                    ));
-                }
-            }
+            self.state = TokenizerState::TagName;
+            self.tag_name.push(ch);
+            self.is_end_tag = false;
         }
         self.advance();
         Ok(())
+    }
+
+    fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '"' {
+            let tag_value = mem::take(&mut self.tag_value);
+            self.open_tag_builder
+                .as_mut()
+                .unwrap()
+                .set_attr_value(tag_value)
+                .map_err(|e| WithPos::new(e, self.pos))?;
+            self.state = TokenizerState::AfterTagValue;
+        } else {
+            self.tag_value.push(ch);
+        }
+
+        self.advance();
+        Ok(())
+    }
+
+    fn finalize_open_tag(&mut self) {
+        if let Some(builder) = self.open_tag_builder.take() {
+            self.tokens.push(Token::OpenTag(builder.build()));
+        }
+    }
+
+    fn advance(&mut self) {
+        if let Some('\n') = self.src.next() {
+            self.pos.break_line();
+        } else {
+            self.pos.advance();
+        }
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.src.peek().map(|ch| *ch)
     }
 }
 
