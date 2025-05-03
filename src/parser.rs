@@ -219,6 +219,10 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
+        if !self.text.is_empty() {
+            self.tokens.push(Token::Text(mem::take(&mut self.text)));
+        }
+
         Ok(self.tokens)
     }
 
