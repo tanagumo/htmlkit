@@ -9,6 +9,7 @@ pub enum TokenizeError<'a> {
     MalformedEndTag(Cow<'a, str>),
     MalformedSelfClosingTag(Cow<'a, str>),
     MalformedTagAttr(Cow<'a, str>),
+    MalformedCommentTag,
 }
 
 impl<'a> Display for TokenizeError<'a> {
@@ -23,6 +24,7 @@ impl<'a> Display for TokenizeError<'a> {
                 format!("malformed self closing tag. ({})", reason)
             }
             TokenizeError::MalformedTagAttr(reason) => format!("{}", reason),
+            TokenizeError::MalformedCommentTag => format!("malformed comment tag"),
         };
 
         write!(f, "tokenize error. ({})", message)
@@ -92,6 +94,7 @@ impl OpenTagBuilder {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token {
     OpenTag(OpenTag),
+    Comment(String),
     Text { content: String, ignore_hint: bool },
     CloseTag(String),
 }
@@ -142,11 +145,11 @@ enum TokenizerState {
     AfterEndTagName,
     AfterTagAttr,
     AfterTagValue,
-    BeforeFirstTag,
     BeforeTagAttr,
     BeforeTagValue,
+    Comment,
+    DocTypeOrComment,
     EndTagOpen,
-    IgnoreUntilGt,
     SelfClosingTagSlash,
     TagAttr,
     TagName,
@@ -158,7 +161,6 @@ enum TokenizerState {
 #[derive(Debug)]
 pub struct Tokenizer<'a> {
     src: Peekable<Chars<'a>>,
-    state_before_ignore: TokenizerState,
     state: TokenizerState,
     is_end_tag: bool,
     tag_name: String,
@@ -169,6 +171,7 @@ pub struct Tokenizer<'a> {
     tokens: Vec<Token>,
     pos: Pos,
     open_tag_builder: Option<OpenTagBuilder>,
+    comment: String,
 }
 
 type TokenizeResult<T> = Result<T, WithPos<TokenizeError<'static>>>;
@@ -177,8 +180,7 @@ impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
         Self {
             src: src.chars().peekable(),
-            state_before_ignore: TokenizerState::BeforeFirstTag,
-            state: TokenizerState::BeforeFirstTag,
+            state: TokenizerState::Text,
             is_end_tag: false,
             tag_name: String::new(),
             tag_attr_name: String::new(),
@@ -188,6 +190,7 @@ impl<'a> Tokenizer<'a> {
             tokens: vec![],
             pos: Pos::default(),
             open_tag_builder: None,
+            comment: String::new(),
         }
     }
 
@@ -197,11 +200,11 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::AfterEndTagName => self.handle_after_tag_name(ch)?,
                 TokenizerState::AfterTagAttr => self.handle_after_tag_attr(ch)?,
                 TokenizerState::AfterTagValue => self.handle_after_tag_value(ch)?,
-                TokenizerState::BeforeFirstTag => self.handle_before_first_tag(ch)?,
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
                 TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
+                TokenizerState::Comment => self.handle_comment(ch)?,
+                TokenizerState::DocTypeOrComment => self.handle_before_doc_type_or_comment(ch)?,
                 TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
-                TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
                 TokenizerState::SelfClosingTagSlash => self.handle_self_closing_tag_slash(ch)?,
                 TokenizerState::TagAttr => self.handle_tag_attr(ch)?,
                 TokenizerState::TagName => self.handle_tag_name(ch)?,
@@ -276,20 +279,6 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_before_first_tag(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '<' {
-            self.state = TokenizerState::TagOpen;
-        }
-        self.advance();
-
-        if let Some('!') = self.peek() {
-            self.text.push('<');
-            self.state_before_ignore = TokenizerState::BeforeFirstTag;
-            self.state = TokenizerState::IgnoreUntilGt;
-        }
-        Ok(())
-    }
-
     fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
@@ -325,23 +314,43 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
-        self.state = TokenizerState::TagName;
-        self.tag_name.push(ch);
-        self.advance();
+    fn handle_comment(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch == '-' {
+            if self.starts_with("-->") {
+                self.advance();
+                self.advance();
+                self.advance();
+                self.tokens
+                    .push(Token::Comment(mem::take(&mut self.comment)));
+                self.state = TokenizerState::Text;
+            } else {
+                return Err(WithPos::new(TokenizeError::MalformedCommentTag, self.pos));
+            }
+        } else {
+            self.comment.push(ch);
+            self.advance();
+        }
         Ok(())
     }
 
-    fn handle_ignore_until_gt(&mut self, ch: char) -> TokenizeResult<()> {
-        self.text.push(ch);
-        if ch == '>' {
-            self.tokens.push(Token::Text {
-                content: mem::take(&mut self.text),
-                ignore_hint: self.state_before_ignore == TokenizerState::BeforeFirstTag,
-            });
-            self.state = self.state_before_ignore;
-        }
+    fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<()> {
+        if self.starts_with("-") {
+            if !self.starts_with("--") {
+                return Err(WithPos::new(TokenizeError::MalformedCommentTag, self.pos));
+            }
 
+            self.advance();
+            self.advance();
+            self.state = TokenizerState::Comment;
+        } else {
+            unimplemented!("doctype is not yet implemented");
+        }
+        Ok(())
+    }
+
+    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
+        self.state = TokenizerState::TagName;
+        self.tag_name.push(ch);
         self.advance();
         Ok(())
     }
@@ -439,13 +448,24 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch == '/' {
-            self.state = TokenizerState::EndTagOpen;
-            self.is_end_tag = true;
+        if !self.text.is_empty() {
+            self.tokens.push(Token::Text {
+                content: mem::take(&mut self.text),
+                ignore_hint: false,
+            });
+        }
+
+        if ch == '!' {
+            self.state = TokenizerState::DocTypeOrComment;
         } else {
-            self.state = TokenizerState::TagName;
-            self.tag_name.push(ch);
-            self.is_end_tag = false;
+            if ch == '/' {
+                self.state = TokenizerState::EndTagOpen;
+                self.is_end_tag = true;
+            } else {
+                self.state = TokenizerState::TagName;
+                self.tag_name.push(ch);
+                self.is_end_tag = false;
+            }
         }
         self.advance();
         Ok(())
@@ -469,30 +489,12 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_text(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch != '<' {
-            self.text.push(ch);
-            self.advance();
+        if ch == '<' {
+            self.state = TokenizerState::TagOpen;
         } else {
-            self.advance();
-
-            match self.peek() {
-                Some('!') => {
-                    self.text.push('<');
-                    self.state_before_ignore = self.state;
-                    self.state = TokenizerState::IgnoreUntilGt;
-                }
-                Some(_) => {
-                    self.state = TokenizerState::TagOpen;
-                    if !self.text.is_empty() {
-                        self.tokens.push(Token::Text {
-                            content: mem::take(&mut self.text),
-                            ignore_hint: false,
-                        });
-                    }
-                }
-                _ => {}
-            }
+            self.text.push(ch);
         }
+        self.advance();
         Ok(())
     }
 
@@ -579,45 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_tag_with_text_before_first_tag() {
-        // ignore any characters before first tag
-        assert_eq!(
-            Tokenizer::new("oajofjaj <! > <tag></tag>").tokenize(),
-            Ok(vec![
-                Token::Text {
-                    content: "<! >".to_owned(),
-                    ignore_hint: true,
-                },
-                Token::OpenTag(OpenTag {
-                    name: "tag".to_owned(),
-                    tag_attrs: vec![],
-                    self_closing: false,
-                }),
-                Token::CloseTag("tag".to_owned())
-            ])
-        );
-    }
-
-    #[test]
-    fn test_simple_tag_with_unclosing() {
-        // if "<!" appears, read until ">" will appear.
-        assert_eq!(
-            Tokenizer::new("<tag>abc>hoge<!</tag>").tokenize(),
-            Ok(vec![
-                Token::OpenTag(OpenTag {
-                    name: "tag".to_owned(),
-                    tag_attrs: vec![],
-                    self_closing: false,
-                }),
-                Token::Text {
-                    content: "abc>hoge<!</tag>".to_owned(),
-                    ignore_hint: false
-                },
-            ])
-        );
-    }
-
-    #[test]
     fn test_simple_tag_with_closed_comment_tag() {
         assert_eq!(
             Tokenizer::new("<tag>before <!-- comment --> after</tag>").tokenize(),
@@ -628,9 +591,10 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::Text {
-                    content: "before <!-- comment -->".to_owned(),
+                    content: "before ".to_owned(),
                     ignore_hint: false
                 },
+                Token::Comment(" comment ".to_owned()),
                 Token::Text {
                     content: " after".to_owned(),
                     ignore_hint: false
@@ -923,5 +887,45 @@ mod tests {
         assert_eq!(tokenizer.starts_with("t12"), true);
         assert_eq!(tokenizer.starts_with("t123"), true);
         assert_eq!(tokenizer.starts_with("t1234"), false);
+    }
+
+    #[test]
+    fn test_comment_tag() {
+        assert_eq!(
+            Tokenizer::new("<!--comment-->").tokenize(),
+            Ok(vec![Token::Comment("comment".to_owned()),])
+        );
+
+        let comment = r#"<!--
+        this
+        is
+        comment
+        -->"#;
+
+        assert_eq!(
+            Tokenizer::new(comment).tokenize(),
+            Ok(vec![Token::Comment(
+                "\n        this\n        is\n        comment\n        ".to_owned()
+            ),])
+        );
+    }
+
+    #[test]
+    fn test_malformed_comment_tag() {
+        assert_eq!(
+            Tokenizer::new("<!-comment-->").tokenize(),
+            Err(WithPos::new(
+                TokenizeError::MalformedCommentTag,
+                Pos { row: 0, col: 2 }
+            ))
+        );
+
+        assert_eq!(
+            Tokenizer::new("<!--comment--->").tokenize(),
+            Err(WithPos::new(
+                TokenizeError::MalformedCommentTag,
+                Pos { row: 0, col: 11 }
+            ))
+        );
     }
 }
