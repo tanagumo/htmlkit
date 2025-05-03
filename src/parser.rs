@@ -145,7 +145,6 @@ enum TokenizerState {
     BeforeFirstTag,
     BeforeTagAttr,
     BeforeTagValue,
-    Data,
     EndTagOpen,
     IgnoreUntilGt,
     SelfClosingTagSlash,
@@ -153,6 +152,7 @@ enum TokenizerState {
     TagName,
     TagOpen,
     TagValue,
+    Text,
 }
 
 #[derive(Debug)]
@@ -200,7 +200,6 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::BeforeFirstTag => self.handle_before_first_tag(ch)?,
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
                 TokenizerState::BeforeTagValue => self.handle_before_tag_value(ch)?,
-                TokenizerState::Data => self.handle_data(ch)?,
                 TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
                 TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
                 TokenizerState::SelfClosingTagSlash => self.handle_self_closing_tag_slash(ch)?,
@@ -208,6 +207,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::TagName => self.handle_tag_name(ch)?,
                 TokenizerState::TagOpen => self.handle_tag_open(ch)?,
                 TokenizerState::TagValue => self.handle_tag_value(ch)?,
+                TokenizerState::Text => self.handle_text(ch)?,
             }
         }
 
@@ -217,7 +217,7 @@ impl<'a> Tokenizer<'a> {
     fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
-                self.state = TokenizerState::Data;
+                self.state = TokenizerState::Text;
             }
             _ => {
                 if !ch.is_whitespace() {
@@ -236,7 +236,7 @@ impl<'a> Tokenizer<'a> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
-                self.state = TokenizerState::Data;
+                self.state = TokenizerState::Text;
             }
             '=' => {
                 self.state = TokenizerState::BeforeTagValue;
@@ -259,7 +259,7 @@ impl<'a> Tokenizer<'a> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
-                self.state = TokenizerState::Data;
+                self.state = TokenizerState::Text;
             }
             '/' => {
                 self.state = TokenizerState::SelfClosingTagSlash;
@@ -294,7 +294,7 @@ impl<'a> Tokenizer<'a> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
-                self.state = TokenizerState::Data;
+                self.state = TokenizerState::Text;
             }
             '/' => {
                 self.state = TokenizerState::SelfClosingTagSlash;
@@ -325,34 +325,6 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_data(&mut self, ch: char) -> TokenizeResult<()> {
-        if ch != '<' {
-            self.text.push(ch);
-            self.advance();
-        } else {
-            self.advance();
-
-            match self.peek() {
-                Some('!') => {
-                    self.text.push('<');
-                    self.state_before_ignore = self.state;
-                    self.state = TokenizerState::IgnoreUntilGt;
-                }
-                Some(_) => {
-                    self.state = TokenizerState::TagOpen;
-                    if !self.text.is_empty() {
-                        self.tokens.push(Token::Text {
-                            content: mem::take(&mut self.text),
-                            ignore_hint: false,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(())
-    }
-
     fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
         self.state = TokenizerState::TagName;
         self.tag_name.push(ch);
@@ -378,7 +350,7 @@ impl<'a> Tokenizer<'a> {
         match ch {
             '>' => {
                 self.finalize_open_tag(true);
-                self.state = TokenizerState::Data;
+                self.state = TokenizerState::Text;
             }
             _ => {
                 if !ch.is_whitespace() {
@@ -411,7 +383,7 @@ impl<'a> Tokenizer<'a> {
                 .add_attr_name(tag_attr_name);
             self.state = if ch == '>' {
                 self.finalize_open_tag(false);
-                TokenizerState::Data
+                TokenizerState::Text
             } else if ch == '=' {
                 TokenizerState::BeforeTagValue
             } else if ch == '/' {
@@ -452,7 +424,7 @@ impl<'a> Tokenizer<'a> {
                 }
             }
             self.state = if token_finalized {
-                TokenizerState::Data
+                TokenizerState::Text
             } else if self.is_end_tag {
                 TokenizerState::AfterEndTagName
             } else {
@@ -493,6 +465,34 @@ impl<'a> Tokenizer<'a> {
         }
 
         self.advance();
+        Ok(())
+    }
+
+    fn handle_text(&mut self, ch: char) -> TokenizeResult<()> {
+        if ch != '<' {
+            self.text.push(ch);
+            self.advance();
+        } else {
+            self.advance();
+
+            match self.peek() {
+                Some('!') => {
+                    self.text.push('<');
+                    self.state_before_ignore = self.state;
+                    self.state = TokenizerState::IgnoreUntilGt;
+                }
+                Some(_) => {
+                    self.state = TokenizerState::TagOpen;
+                    if !self.text.is_empty() {
+                        self.tokens.push(Token::Text {
+                            content: mem::take(&mut self.text),
+                            ignore_hint: false,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
