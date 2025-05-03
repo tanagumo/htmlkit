@@ -7,6 +7,7 @@ pub enum TokenizeError<'a> {
     InvalidTagName(Cow<'a, str>),
     InvalidTagAttrName(Cow<'a, str>),
     MalformedEndTag(Cow<'a, str>),
+    MalformedSelfClosingTag(Cow<'a, str>),
     MalformedTagAttr(Cow<'a, str>),
 }
 
@@ -18,6 +19,9 @@ impl<'a> Display for TokenizeError<'a> {
                 format!("{} is not a valid tag attr name", name)
             }
             TokenizeError::MalformedEndTag(reason) => format!("malformed end tag. ({})", reason),
+            TokenizeError::MalformedSelfClosingTag(reason) => {
+                format!("malformed self closing tag. ({})", reason)
+            }
             TokenizeError::MalformedTagAttr(reason) => format!("{}", reason),
         };
 
@@ -37,6 +41,7 @@ pub struct TagAttr {
 pub struct OpenTag {
     name: String,
     tag_attrs: Vec<TagAttr>,
+    self_closing: bool,
 }
 
 #[derive(Debug)]
@@ -75,10 +80,11 @@ impl OpenTagBuilder {
         }
     }
 
-    fn build(self) -> OpenTag {
+    fn build(self, self_closing: bool) -> OpenTag {
         OpenTag {
             name: self.name,
             tag_attrs: self.tag_attrs,
+            self_closing,
         }
     }
 }
@@ -142,6 +148,7 @@ enum TokenizerState {
     Data,
     EndTagOpen,
     IgnoreUntilGt,
+    SelfClosingTagSlash,
     TagAttr,
     TagName,
     TagOpen,
@@ -196,6 +203,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::Data => self.handle_data(ch)?,
                 TokenizerState::EndTagOpen => self.handle_end_tag_open(ch)?,
                 TokenizerState::IgnoreUntilGt => self.handle_ignore_until_gt(ch)?,
+                TokenizerState::SelfClosingTagSlash => self.handle_self_closing_tag_slash(ch)?,
                 TokenizerState::TagAttr => self.handle_tag_attr(ch)?,
                 TokenizerState::TagName => self.handle_tag_name(ch)?,
                 TokenizerState::TagOpen => self.handle_tag_open(ch)?,
@@ -227,11 +235,14 @@ impl<'a> Tokenizer<'a> {
     fn handle_after_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
-                self.finalize_open_tag();
+                self.finalize_open_tag(false);
                 self.state = TokenizerState::Data;
             }
             '=' => {
                 self.state = TokenizerState::BeforeTagValue;
+            }
+            '/' => {
+                self.state = TokenizerState::SelfClosingTagSlash;
             }
             ch if !ch.is_whitespace() => {
                 self.tag_attr_name.push(ch);
@@ -247,8 +258,11 @@ impl<'a> Tokenizer<'a> {
     fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
-                self.finalize_open_tag();
+                self.finalize_open_tag(false);
                 self.state = TokenizerState::Data;
+            }
+            '/' => {
+                self.state = TokenizerState::SelfClosingTagSlash;
             }
             ch => {
                 if !ch.is_whitespace() {
@@ -279,8 +293,11 @@ impl<'a> Tokenizer<'a> {
     fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
         match ch {
             '>' => {
-                self.finalize_open_tag();
+                self.finalize_open_tag(false);
                 self.state = TokenizerState::Data;
+            }
+            '/' => {
+                self.state = TokenizerState::SelfClosingTagSlash;
             }
             ch if !ch.is_whitespace() => {
                 self.tag_attr_name.push(ch);
@@ -357,6 +374,28 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
+    fn handle_self_closing_tag_slash(&mut self, ch: char) -> TokenizeResult<()> {
+        match ch {
+            '>' => {
+                self.finalize_open_tag(true);
+                self.state = TokenizerState::Data;
+            }
+            _ => {
+                if !ch.is_whitespace() {
+                    return Err(WithPos::new(
+                        TokenizeError::MalformedSelfClosingTag(Cow::Borrowed(
+                            "self closing tag does not accept any character after slash",
+                        )),
+                        self.pos,
+                    ));
+                }
+            }
+        }
+
+        self.advance();
+        Ok(())
+    }
+
     fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
         if ch == '>' || ch == '=' || ch.is_whitespace() {
             let tag_attr_name = mem::take(&mut self.tag_attr_name);
@@ -371,10 +410,12 @@ impl<'a> Tokenizer<'a> {
                 .unwrap()
                 .add_attr_name(tag_attr_name);
             self.state = if ch == '>' {
-                self.finalize_open_tag();
+                self.finalize_open_tag(false);
                 TokenizerState::Data
             } else if ch == '=' {
                 TokenizerState::BeforeTagValue
+            } else if ch == '/' {
+                TokenizerState::SelfClosingTagSlash
             } else {
                 TokenizerState::AfterTagAttr
             };
@@ -388,7 +429,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
         if ch == '>' || ch.is_whitespace() {
-            let token_fixed = ch == '>';
+            let token_finalized = ch == '>';
 
             let tag = mem::take(&mut self.tag_name);
             if let None = self.re_for_tag_name.captures(&tag) {
@@ -400,16 +441,17 @@ impl<'a> Tokenizer<'a> {
             if self.is_end_tag {
                 self.tokens.push(Token::CloseTag(tag));
             } else {
-                if token_fixed {
+                if token_finalized {
                     self.tokens.push(Token::OpenTag(OpenTag {
                         name: tag,
                         tag_attrs: vec![],
+                        self_closing: false,
                     }));
                 } else {
                     self.open_tag_builder = Some(OpenTagBuilder::new(tag));
                 }
             }
-            self.state = if token_fixed {
+            self.state = if token_finalized {
                 TokenizerState::Data
             } else if self.is_end_tag {
                 TokenizerState::AfterEndTagName
@@ -454,9 +496,10 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn finalize_open_tag(&mut self) {
+    fn finalize_open_tag(&mut self, self_closing: bool) {
         if let Some(builder) = self.open_tag_builder.take() {
-            self.tokens.push(Token::OpenTag(builder.build()));
+            self.tokens
+                .push(Token::OpenTag(builder.build(self_closing)));
         }
     }
 
@@ -484,7 +527,8 @@ mod tests {
             Ok(vec![
                 Token::OpenTag(OpenTag {
                     name: "tag".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -498,7 +542,8 @@ mod tests {
             Ok(vec![
                 Token::OpenTag(OpenTag {
                     name: "tag".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::Text {
                     content: "abc>hoge".to_owned(),
@@ -521,7 +566,8 @@ mod tests {
                 },
                 Token::OpenTag(OpenTag {
                     name: "tag".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -536,7 +582,8 @@ mod tests {
             Ok(vec![
                 Token::OpenTag(OpenTag {
                     name: "tag".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::Text {
                     content: "abc>hoge<!</tag>".to_owned(),
@@ -553,7 +600,8 @@ mod tests {
             Ok(vec![
                 Token::OpenTag(OpenTag {
                     name: "tag".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::Text {
                     content: "before <!-- comment -->".to_owned(),
@@ -575,7 +623,8 @@ mod tests {
             Ok(vec![
                 Token::OpenTag(OpenTag {
                     name: "tag1".to_owned(),
-                    tag_attrs: vec![]
+                    tag_attrs: vec![],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -623,7 +672,8 @@ mod tests {
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned(),
                         value: None
-                    }]
+                    }],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -646,7 +696,8 @@ mod tests {
                             name: "attr2".to_owned(),
                             value: None
                         },
-                    ]
+                    ],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -674,7 +725,8 @@ mod tests {
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned(),
                         value: Some("value".to_owned()),
-                    },]
+                    }],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -689,7 +741,8 @@ mod tests {
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned(),
                         value: Some("value".to_owned()),
-                    }]
+                    }],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -712,7 +765,8 @@ mod tests {
                             name: "attr2".to_owned(),
                             value: Some("value2".to_owned()),
                         },
-                    ]
+                    ],
+                    self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
             ])
@@ -726,6 +780,112 @@ mod tests {
             Err(WithPos::new(
                 TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
                 Pos { row: 1, col: 11 }
+            ))
+        );
+    }
+
+    #[test]
+    fn test_simple_self_closing_tag() {
+        assert_eq!(
+            Tokenizer::new("<tag />").tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![],
+                self_closing: true,
+            }),])
+        );
+    }
+
+    #[test]
+    fn test_self_closing_tag_with_attr() {
+        assert_eq!(
+            Tokenizer::new("<tag attr />").tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![TagAttr {
+                    name: "attr".to_owned(),
+                    value: None,
+                }],
+                self_closing: true,
+            }),])
+        );
+
+        assert_eq!(
+            Tokenizer::new("<tag attr1 attr2 />").tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![
+                    TagAttr {
+                        name: "attr1".to_owned(),
+                        value: None,
+                    },
+                    TagAttr {
+                        name: "attr2".to_owned(),
+                        value: None,
+                    }
+                ],
+                self_closing: true,
+            }),])
+        );
+    }
+
+    #[test]
+    fn test_self_closing_tag_with_attr_with_value() {
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr1="value1" />"#).tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![TagAttr {
+                    name: "attr1".to_owned(),
+                    value: Some("value1".to_owned()),
+                }],
+                self_closing: true,
+            }),])
+        );
+
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr1="value1" attr2 = "value2" />"#).tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![
+                    TagAttr {
+                        name: "attr1".to_owned(),
+                        value: Some("value1".to_owned()),
+                    },
+                    TagAttr {
+                        name: "attr2".to_owned(),
+                        value: Some("value2".to_owned()),
+                    },
+                ],
+                self_closing: true,
+            }),])
+        );
+    }
+
+    #[test]
+    fn test_self_closing_tag_with_spaces_after_slash() {
+        assert_eq!(
+            Tokenizer::new("<tag attr /               >").tokenize(),
+            Ok(vec![Token::OpenTag(OpenTag {
+                name: "tag".to_owned(),
+                tag_attrs: vec![TagAttr {
+                    name: "attr".to_owned(),
+                    value: None,
+                }],
+                self_closing: true,
+            }),])
+        );
+    }
+
+    #[test]
+    fn test_malformed_self_closing_tag() {
+        assert_eq!(
+            Tokenizer::new(r#"<tag attr attr2="value2" /        token       >"#).tokenize(),
+            Err(WithPos::new(
+                TokenizeError::MalformedSelfClosingTag(Cow::Borrowed(
+                    "self closing tag does not accept any character after slash"
+                )),
+                Pos { row: 0, col: 34 }
             ))
         );
     }
