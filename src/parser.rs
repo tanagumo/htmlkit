@@ -571,8 +571,8 @@ impl<'a> Tokenizer<'a> {
 
         let mut ret = true;
         for ch in target.chars() {
-            if let Some(&v) = cloned.peek() {
-                if v.to_lowercase().collect::<String>() != ch.to_lowercase().collect::<String>() {
+            if let Some(v) = cloned.peek() {
+                if !v.eq_ignore_ascii_case(&ch) {
                     ret = false;
                     break;
                 } else {
