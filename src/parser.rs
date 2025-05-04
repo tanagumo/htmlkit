@@ -538,7 +538,8 @@ impl<'a> Tokenizer<'a> {
         self.src.peek().map(|ch| *ch)
     }
 
-    fn starts_with(&self, target: &str) -> bool {
+    fn starts_with(&self, target: impl AsRef<str>) -> bool {
+        let target = target.as_ref();
         if target.is_empty() {
             return true;
         }
@@ -562,7 +563,8 @@ impl<'a> Tokenizer<'a> {
         ret
     }
 
-    fn starts_with_case_insensitive(&self, target: &str) -> bool {
+    fn starts_with_case_insensitive(&self, target: impl AsRef<str>) -> bool {
+        let target = target.as_ref();
         if target.is_empty() {
             return true;
         }
