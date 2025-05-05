@@ -163,10 +163,72 @@ enum TokenizerState {
 }
 
 #[derive(Debug)]
-pub struct Tokenizer<'a> {
+struct Input<'a> {
     src: &'a str,
+    peekable: Peekable<Chars<'a>>,
+    loc: Loc,
+    pos: usize,
+}
+
+impl<'a> Input<'a> {
+    fn new(src: &'a str) -> Self {
+        let chars = src.chars();
+        Self {
+            src,
+            peekable: chars.peekable(),
+            loc: Loc::default(),
+            pos: 0,
+        }
+    }
+
+    fn advance(&mut self) -> bool {
+        match self.peekable.next() {
+            Some(v) => {
+                if v == '\n' {
+                    self.loc.break_line();
+                } else {
+                    self.loc.advance();
+                }
+                self.pos += v.len_utf8();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn peek(&mut self) -> Option<char> {
+        self.peekable.peek().copied()
+    }
+
+    fn remaining(&self) -> &'a str {
+        &self.src[self.pos..]
+    }
+
+    fn starts_with(&self, target: impl AsRef<str>) -> bool {
+        self.remaining().starts_with(target.as_ref())
+    }
+
+    fn starts_with_case_insensitive(&self, target: impl AsRef<str>) -> bool {
+        let chars = target.as_ref().chars();
+        let mut remaining_chars = self.remaining().chars();
+
+        for c in chars {
+            if let Some(v) = remaining_chars.next() {
+                if !c.eq_ignore_ascii_case(&v) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+#[derive(Debug)]
+pub struct Tokenizer<'a> {
+    input: Input<'a>,
     token_loc: Loc,
-    src_peekable: Peekable<Chars<'a>>,
     state: TokenizerState,
     is_end_tag: bool,
     tag_name: String,
@@ -175,7 +237,6 @@ pub struct Tokenizer<'a> {
     text: String,
     re_for_tag_name: Regex,
     tokens: Vec<Token>,
-    loc: Loc,
     open_tag_builder: Option<OpenTagBuilder>,
     comment: String,
 }
@@ -185,9 +246,8 @@ type TokenizeResult<'a, T> = Result<T, WithLoc<TokenizeError<'a>>>;
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
         Self {
-            src,
+            input: Input::new(src),
             token_loc: Loc::default(),
-            src_peekable: src.chars().peekable(),
             state: TokenizerState::Text,
             is_end_tag: false,
             tag_name: String::new(),
@@ -196,7 +256,6 @@ impl<'a> Tokenizer<'a> {
             text: String::new(),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
-            loc: Loc::default(),
             open_tag_builder: None,
             comment: String::new(),
         }
@@ -239,7 +298,7 @@ impl<'a> Tokenizer<'a> {
                 if !ch.is_whitespace() {
                     return Err(WithLoc::new(
                         TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                        self.loc,
+                        self.input.loc,
                     ));
                 }
             }
@@ -329,7 +388,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_comment(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '-' {
-            if self.starts_with("-->") {
+            if self.input.starts_with("-->") {
                 self.advance();
                 self.advance();
                 self.advance();
@@ -337,7 +396,10 @@ impl<'a> Tokenizer<'a> {
                     .push(Token::Comment(mem::take(&mut self.comment)));
                 self.state = TokenizerState::Text;
             } else {
-                return Err(WithLoc::new(TokenizeError::MalformedCommentTag, self.loc));
+                return Err(WithLoc::new(
+                    TokenizeError::MalformedCommentTag,
+                    self.input.loc,
+                ));
             }
         } else {
             self.comment.push(ch);
@@ -356,17 +418,23 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<'a, ()> {
-        if self.starts_with("-") {
-            if !self.starts_with("--") {
-                return Err(WithLoc::new(TokenizeError::MalformedCommentTag, self.loc));
+        if self.input.starts_with("-") {
+            if !self.input.starts_with("--") {
+                return Err(WithLoc::new(
+                    TokenizeError::MalformedCommentTag,
+                    self.input.loc,
+                ));
             }
 
             self.advance();
             self.advance();
             self.state = TokenizerState::Comment;
         } else {
-            if !self.starts_with_case_insensitive("DOCTYPE") {
-                return Err(WithLoc::new(TokenizeError::MalformedDocTypeTag, self.loc));
+            if !self.input.starts_with_case_insensitive("DOCTYPE") {
+                return Err(WithLoc::new(
+                    TokenizeError::MalformedDocTypeTag,
+                    self.input.loc,
+                ));
             }
             self.state = TokenizerState::DocType;
             for _ in 0..7 {
@@ -395,7 +463,7 @@ impl<'a> Tokenizer<'a> {
                         TokenizeError::MalformedSelfClosingTag(Cow::Borrowed(
                             "self closing tag does not accept any character after slash",
                         )),
-                        self.loc,
+                        self.input.loc,
                     ));
                 }
             }
@@ -411,7 +479,7 @@ impl<'a> Tokenizer<'a> {
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
                 return Err(WithLoc::new(
                     TokenizeError::InvalidTagAttrName(Cow::Owned(tag_attr_name)),
-                    self.loc,
+                    self.input.loc,
                 ));
             }
             self.open_tag_builder
@@ -444,7 +512,7 @@ impl<'a> Tokenizer<'a> {
             if let None = self.re_for_tag_name.captures(&tag) {
                 return Err(WithLoc::new(
                     TokenizeError::InvalidTagName(Cow::Owned(tag)),
-                    self.loc,
+                    self.input.loc,
                 ));
             }
             if self.is_end_tag {
@@ -503,7 +571,7 @@ impl<'a> Tokenizer<'a> {
                 .as_mut()
                 .unwrap()
                 .set_attr_value(tag_value)
-                .map_err(|e| WithLoc::new(e, self.loc))?;
+                .map_err(|e| WithLoc::new(e, self.input.loc))?;
             self.state = TokenizerState::AfterTagValue;
         } else {
             self.tag_value.push(ch);
@@ -530,72 +598,47 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn advance(&mut self) {
-        if let Some('\n') = self.src_peekable.next() {
-            self.loc.break_line();
-        } else {
-            self.loc.advance();
-        }
+    fn advance(&mut self) -> bool {
+        self.input.advance()
     }
 
     fn peek(&mut self) -> Option<char> {
-        self.src_peekable.peek().map(|ch| *ch)
-    }
-
-    fn starts_with(&self, target: impl AsRef<str>) -> bool {
-        let target = target.as_ref();
-        if target.is_empty() {
-            return true;
-        }
-
-        let mut cloned = self.src_peekable.clone();
-
-        let mut ret = true;
-        for ch in target.chars() {
-            if let Some(&v) = cloned.peek() {
-                if v != ch {
-                    ret = false;
-                    break;
-                } else {
-                    cloned.next();
-                }
-            } else {
-                ret = false;
-                break;
-            }
-        }
-        ret
-    }
-
-    fn starts_with_case_insensitive(&self, target: impl AsRef<str>) -> bool {
-        let target = target.as_ref();
-        if target.is_empty() {
-            return true;
-        }
-
-        let mut cloned = self.src_peekable.clone();
-
-        let mut ret = true;
-        for ch in target.chars() {
-            if let Some(v) = cloned.peek() {
-                if !v.eq_ignore_ascii_case(&ch) {
-                    ret = false;
-                    break;
-                } else {
-                    cloned.next();
-                }
-            } else {
-                ret = false;
-                break;
-            }
-        }
-        ret
+        self.input.peek()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_input() {
+        let mut input = Input::new("tあ\nz");
+        input.advance();
+        assert_eq!(input.loc, Loc { row: 0, col: 1 });
+        assert_eq!(input.pos, 1);
+        assert_eq!(input.remaining(), "あ\nz");
+
+        input.advance();
+        assert_eq!(input.loc, Loc { row: 0, col: 2 });
+        assert_eq!(input.pos, 4);
+        assert_eq!(input.remaining(), "\nz");
+
+        input.advance();
+        assert_eq!(input.loc, Loc { row: 1, col: 0 });
+        assert_eq!(input.pos, 5);
+        assert_eq!(input.remaining(), "z");
+
+        input.advance();
+        assert_eq!(input.loc, Loc { row: 1, col: 1 });
+        assert_eq!(input.pos, 6);
+        assert_eq!(input.remaining(), "");
+
+        input.advance();
+        assert_eq!(input.loc, Loc { row: 1, col: 1 });
+        assert_eq!(input.pos, 6);
+        assert_eq!(input.remaining(), "");
+    }
 
     #[test]
     fn test_simple_tag_with_no_child() {
@@ -938,12 +981,23 @@ mod tests {
     #[test]
     fn test_starts_with() {
         let tokenizer = Tokenizer::new("t123");
-        assert_eq!(tokenizer.starts_with(""), true);
-        assert_eq!(tokenizer.starts_with("t"), true);
-        assert_eq!(tokenizer.starts_with("t1"), true);
-        assert_eq!(tokenizer.starts_with("t12"), true);
-        assert_eq!(tokenizer.starts_with("t123"), true);
-        assert_eq!(tokenizer.starts_with("t1234"), false);
+        assert_eq!(tokenizer.input.starts_with(""), true);
+        assert_eq!(tokenizer.input.starts_with("t"), true);
+        assert_eq!(tokenizer.input.starts_with("t1"), true);
+        assert_eq!(tokenizer.input.starts_with("t12"), true);
+        assert_eq!(tokenizer.input.starts_with("T123"), false);
+        assert_eq!(tokenizer.input.starts_with("t1234"), false);
+    }
+
+    #[test]
+    fn test_starts_with_case_insensitive() {
+        let tokenizer = Tokenizer::new("t123");
+        assert_eq!(tokenizer.input.starts_with_case_insensitive(""), true);
+        assert_eq!(tokenizer.input.starts_with_case_insensitive("t"), true);
+        assert_eq!(tokenizer.input.starts_with_case_insensitive("t1"), true);
+        assert_eq!(tokenizer.input.starts_with_case_insensitive("t12"), true);
+        assert_eq!(tokenizer.input.starts_with_case_insensitive("T123"), true);
+        assert_eq!(tokenizer.input.starts_with_case_insensitive("t1234"), false);
     }
 
     #[test]
