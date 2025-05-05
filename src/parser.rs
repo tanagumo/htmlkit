@@ -143,25 +143,6 @@ impl<T: Display> Display for WithLoc<T> {
 
 impl<T: StdError + Send + Sync + 'static> StdError for WithLoc<T> {}
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TokenizerState {
-    AfterEndTagName,
-    AfterTagAttr,
-    AfterTagValue,
-    BeforeTagAttr,
-    BeforeTagValue,
-    Comment,
-    DocType,
-    DocTypeOrComment,
-    EndTagOpen,
-    SelfClosingTagSlash,
-    TagAttr,
-    TagName,
-    TagOpen,
-    TagValue,
-    Text,
-}
-
 #[derive(Debug)]
 struct Input<'a> {
     src: &'a str,
@@ -223,6 +204,25 @@ impl<'a> Input<'a> {
         }
         true
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum TokenizerState {
+    AfterEndTagName,
+    AfterTagAttr,
+    AfterTagValue,
+    BeforeTagAttr,
+    BeforeTagValue,
+    Comment,
+    DocType,
+    DocTypeOrComment,
+    EndTagOpen,
+    SelfClosingTagSlash,
+    TagAttr,
+    TagName,
+    TagOpen,
+    TagValue,
+    Text,
 }
 
 #[derive(Debug)]
