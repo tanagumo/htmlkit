@@ -103,12 +103,12 @@ pub enum Token {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Pos {
+struct Loc {
     row: usize,
     col: usize,
 }
 
-impl Pos {
+impl Loc {
     fn advance(&mut self) {
         self.col += 1;
     }
@@ -120,28 +120,28 @@ impl Pos {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct WithPos<T> {
+pub struct WithLoc<T> {
     value: T,
-    pos: Pos,
+    loc: Loc,
 }
 
-impl<T> WithPos<T> {
-    fn new(value: T, pos: Pos) -> Self {
-        Self { value, pos }
+impl<T> WithLoc<T> {
+    fn new(value: T, loc: Loc) -> Self {
+        Self { value, loc }
     }
 }
 
-impl<T: Display> Display for WithPos<T> {
+impl<T: Display> Display for WithLoc<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}. (row: {}, col: {})",
-            self.value, self.pos.row, self.pos.col
+            self.value, self.loc.row, self.loc.col
         )
     }
 }
 
-impl<T: StdError + Send + Sync + 'static> StdError for WithPos<T> {}
+impl<T: StdError + Send + Sync + 'static> StdError for WithLoc<T> {}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum TokenizerState {
@@ -173,12 +173,12 @@ pub struct Tokenizer<'a> {
     text: String,
     re_for_tag_name: Regex,
     tokens: Vec<Token>,
-    pos: Pos,
+    loc: Loc,
     open_tag_builder: Option<OpenTagBuilder>,
     comment: String,
 }
 
-type TokenizeResult<T> = Result<T, WithPos<TokenizeError<'static>>>;
+type TokenizeResult<T> = Result<T, WithLoc<TokenizeError<'static>>>;
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
@@ -192,7 +192,7 @@ impl<'a> Tokenizer<'a> {
             text: String::new(),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
-            pos: Pos::default(),
+            loc: Loc::default(),
             open_tag_builder: None,
             comment: String::new(),
         }
@@ -233,9 +233,9 @@ impl<'a> Tokenizer<'a> {
             }
             _ => {
                 if !ch.is_whitespace() {
-                    return Err(WithPos::new(
+                    return Err(WithLoc::new(
                         TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                        self.pos,
+                        self.loc,
                     ));
                 }
             }
@@ -333,7 +333,7 @@ impl<'a> Tokenizer<'a> {
                     .push(Token::Comment(mem::take(&mut self.comment)));
                 self.state = TokenizerState::Text;
             } else {
-                return Err(WithPos::new(TokenizeError::MalformedCommentTag, self.pos));
+                return Err(WithLoc::new(TokenizeError::MalformedCommentTag, self.loc));
             }
         } else {
             self.comment.push(ch);
@@ -354,7 +354,7 @@ impl<'a> Tokenizer<'a> {
     fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<()> {
         if self.starts_with("-") {
             if !self.starts_with("--") {
-                return Err(WithPos::new(TokenizeError::MalformedCommentTag, self.pos));
+                return Err(WithLoc::new(TokenizeError::MalformedCommentTag, self.loc));
             }
 
             self.advance();
@@ -362,7 +362,7 @@ impl<'a> Tokenizer<'a> {
             self.state = TokenizerState::Comment;
         } else {
             if !self.starts_with_case_insensitive("DOCTYPE") {
-                return Err(WithPos::new(TokenizeError::MalformedDocTypeTag, self.pos));
+                return Err(WithLoc::new(TokenizeError::MalformedDocTypeTag, self.loc));
             }
             self.state = TokenizerState::DocType;
             for _ in 0..7 {
@@ -387,11 +387,11 @@ impl<'a> Tokenizer<'a> {
             }
             _ => {
                 if !ch.is_whitespace() {
-                    return Err(WithPos::new(
+                    return Err(WithLoc::new(
                         TokenizeError::MalformedSelfClosingTag(Cow::Borrowed(
                             "self closing tag does not accept any character after slash",
                         )),
-                        self.pos,
+                        self.loc,
                     ));
                 }
             }
@@ -405,9 +405,9 @@ impl<'a> Tokenizer<'a> {
         if ch == '>' || ch == '=' || ch.is_whitespace() {
             let tag_attr_name = mem::take(&mut self.tag_attr_name);
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
-                return Err(WithPos::new(
+                return Err(WithLoc::new(
                     TokenizeError::InvalidTagAttrName(Cow::Owned(tag_attr_name)),
-                    self.pos,
+                    self.loc,
                 ));
             }
             self.open_tag_builder
@@ -438,9 +438,9 @@ impl<'a> Tokenizer<'a> {
 
             let tag = mem::take(&mut self.tag_name);
             if let None = self.re_for_tag_name.captures(&tag) {
-                return Err(WithPos::new(
+                return Err(WithLoc::new(
                     TokenizeError::InvalidTagName(Cow::Owned(tag)),
-                    self.pos,
+                    self.loc,
                 ));
             }
             if self.is_end_tag {
@@ -499,7 +499,7 @@ impl<'a> Tokenizer<'a> {
                 .as_mut()
                 .unwrap()
                 .set_attr_value(tag_value)
-                .map_err(|e| WithPos::new(e, self.pos))?;
+                .map_err(|e| WithLoc::new(e, self.loc))?;
             self.state = TokenizerState::AfterTagValue;
         } else {
             self.tag_value.push(ch);
@@ -528,9 +528,9 @@ impl<'a> Tokenizer<'a> {
 
     fn advance(&mut self) {
         if let Some('\n') = self.src.next() {
-            self.pos.break_line();
+            self.loc.break_line();
         } else {
-            self.pos.advance();
+            self.loc.advance();
         }
     }
 
@@ -662,17 +662,17 @@ mod tests {
         // invalid tag name
         assert_eq!(
             Tokenizer::new("<2a></tag>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::InvalidTagName(Cow::Borrowed("2a")),
-                Pos { row: 0, col: 3 }
+                Loc { row: 0, col: 3 }
             ))
         );
 
         assert_eq!(
             Tokenizer::new("<tag></3b>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::InvalidTagName(Cow::Borrowed("3b")),
-                Pos { row: 0, col: 9 }
+                Loc { row: 0, col: 9 }
             ))
         );
     }
@@ -681,9 +681,9 @@ mod tests {
     fn test_invalid_tag_name_with_line_break() {
         assert_eq!(
             Tokenizer::new("<tag>\n</999999a>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::InvalidTagName(Cow::Borrowed("999999a")),
-                Pos { row: 1, col: 9 }
+                Loc { row: 1, col: 9 }
             ))
         );
     }
@@ -734,9 +734,9 @@ mod tests {
     fn test_tag_with_invalid_tag_attr_name() {
         assert_eq!(
             Tokenizer::new("<tag 3attr></tag>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::InvalidTagAttrName(Cow::Borrowed("3attr")),
-                Pos { row: 0, col: 10 }
+                Loc { row: 0, col: 10 }
             ))
         );
     }
@@ -803,9 +803,9 @@ mod tests {
     fn test_malformed_end_tag() {
         assert_eq!(
             Tokenizer::new("<tag attr1=\"value1\">line1\nline2</tag attr>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                Pos { row: 1, col: 11 }
+                Loc { row: 1, col: 11 }
             ))
         );
     }
@@ -907,11 +907,11 @@ mod tests {
     fn test_malformed_self_closing_tag() {
         assert_eq!(
             Tokenizer::new(r#"<tag attr attr2="value2" /        token       >"#).tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::MalformedSelfClosingTag(Cow::Borrowed(
                     "self closing tag does not accept any character after slash"
                 )),
-                Pos { row: 0, col: 34 }
+                Loc { row: 0, col: 34 }
             ))
         );
     }
@@ -952,17 +952,17 @@ mod tests {
     fn test_malformed_comment_tag() {
         assert_eq!(
             Tokenizer::new("<!-comment-->").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::MalformedCommentTag,
-                Pos { row: 0, col: 2 }
+                Loc { row: 0, col: 2 }
             ))
         );
 
         assert_eq!(
             Tokenizer::new("<!--comment--->").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::MalformedCommentTag,
-                Pos { row: 0, col: 11 }
+                Loc { row: 0, col: 11 }
             ))
         );
     }
@@ -994,9 +994,9 @@ mod tests {
     fn test_malformed_doc_type_tag() {
         assert_eq!(
             Tokenizer::new("<!doctyp>").tokenize(),
-            Err(WithPos::new(
+            Err(WithLoc::new(
                 TokenizeError::MalformedDocTypeTag,
-                Pos { row: 0, col: 2 }
+                Loc { row: 0, col: 2 }
             ))
         );
     }
