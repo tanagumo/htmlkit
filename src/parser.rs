@@ -164,7 +164,9 @@ enum TokenizerState {
 
 #[derive(Debug)]
 pub struct Tokenizer<'a> {
-    src: Peekable<Chars<'a>>,
+    src: &'a str,
+    token_loc: Loc,
+    src_peekable: Peekable<Chars<'a>>,
     state: TokenizerState,
     is_end_tag: bool,
     tag_name: String,
@@ -178,12 +180,14 @@ pub struct Tokenizer<'a> {
     comment: String,
 }
 
-type TokenizeResult<T> = Result<T, WithLoc<TokenizeError<'static>>>;
+type TokenizeResult<'a, T> = Result<T, WithLoc<TokenizeError<'a>>>;
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
         Self {
-            src: src.chars().peekable(),
+            src,
+            token_loc: Loc::default(),
+            src_peekable: src.chars().peekable(),
             state: TokenizerState::Text,
             is_end_tag: false,
             tag_name: String::new(),
@@ -198,7 +202,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn tokenize(mut self) -> TokenizeResult<Vec<Token>> {
+    pub fn tokenize(&mut self) -> TokenizeResult<'a, &[Token]> {
         while let Some(ch) = self.peek() {
             match self.state {
                 TokenizerState::AfterEndTagName => self.handle_after_tag_name(ch)?,
@@ -223,10 +227,10 @@ impl<'a> Tokenizer<'a> {
             self.tokens.push(Token::Text(mem::take(&mut self.text)));
         }
 
-        Ok(self.tokens)
+        Ok(&self.tokens)
     }
 
-    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.state = TokenizerState::Text;
@@ -244,7 +248,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_after_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_after_tag_attr(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
@@ -267,7 +271,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_after_tag_value(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
@@ -288,7 +292,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_before_tag_attr(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.finalize_open_tag(false);
@@ -308,7 +312,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_before_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_before_tag_value(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '"' => {}
             ch => {
@@ -323,7 +327,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_comment(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_comment(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '-' {
             if self.starts_with("-->") {
                 self.advance();
@@ -342,7 +346,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_doc_type(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_doc_type(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '>' {
             self.tokens.push(Token::DocTypeTag);
             self.state = TokenizerState::Text;
@@ -351,7 +355,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<()> {
+    fn handle_before_doc_type_or_comment(&mut self, _ch: char) -> TokenizeResult<'a, ()> {
         if self.starts_with("-") {
             if !self.starts_with("--") {
                 return Err(WithLoc::new(TokenizeError::MalformedCommentTag, self.loc));
@@ -372,14 +376,14 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         self.state = TokenizerState::TagName;
         self.tag_name.push(ch);
         self.advance();
         Ok(())
     }
 
-    fn handle_self_closing_tag_slash(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_self_closing_tag_slash(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.finalize_open_tag(true);
@@ -401,7 +405,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '>' || ch == '=' || ch.is_whitespace() {
             let tag_attr_name = mem::take(&mut self.tag_attr_name);
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
@@ -432,7 +436,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_tag_name(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '>' || ch.is_whitespace() {
             let token_finalized = ch == '>';
 
@@ -471,7 +475,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if !self.text.is_empty() {
             self.tokens.push(Token::Text(mem::take(&mut self.text)));
         }
@@ -492,7 +496,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '"' {
             let tag_value = mem::take(&mut self.tag_value);
             self.open_tag_builder
@@ -509,7 +513,7 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_text(&mut self, ch: char) -> TokenizeResult<()> {
+    fn handle_text(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '<' {
             self.state = TokenizerState::TagOpen;
         } else {
@@ -527,7 +531,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn advance(&mut self) {
-        if let Some('\n') = self.src.next() {
+        if let Some('\n') = self.src_peekable.next() {
             self.loc.break_line();
         } else {
             self.loc.advance();
@@ -535,7 +539,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn peek(&mut self) -> Option<char> {
-        self.src.peek().map(|ch| *ch)
+        self.src_peekable.peek().map(|ch| *ch)
     }
 
     fn starts_with(&self, target: impl AsRef<str>) -> bool {
@@ -544,7 +548,7 @@ impl<'a> Tokenizer<'a> {
             return true;
         }
 
-        let mut cloned = self.src.clone();
+        let mut cloned = self.src_peekable.clone();
 
         let mut ret = true;
         for ch in target.chars() {
@@ -569,7 +573,7 @@ impl<'a> Tokenizer<'a> {
             return true;
         }
 
-        let mut cloned = self.src.clone();
+        let mut cloned = self.src_peekable.clone();
 
         let mut ret = true;
         for ch in target.chars() {
@@ -604,7 +608,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -620,7 +625,8 @@ mod tests {
                 }),
                 Token::Text("abc>hoge".to_owned()),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -638,7 +644,8 @@ mod tests {
                 Token::Comment(" comment ".to_owned()),
                 Token::Text(" after".to_owned()),
                 Token::CloseTag("tag".to_owned()),
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -653,7 +660,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -702,7 +710,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -726,7 +735,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -755,7 +765,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
 
         // allow space between tag attr name and it's value
@@ -771,7 +782,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -795,7 +807,8 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::CloseTag("tag".to_owned())
-            ])
+            ]
+            .as_ref())
         );
     }
 
@@ -818,7 +831,8 @@ mod tests {
                 name: "tag".to_owned(),
                 tag_attrs: vec![],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
     }
 
@@ -833,7 +847,8 @@ mod tests {
                     value: None,
                 }],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
 
         assert_eq!(
@@ -851,7 +866,8 @@ mod tests {
                     }
                 ],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
     }
 
@@ -866,7 +882,8 @@ mod tests {
                     value: Some("value1".to_owned()),
                 }],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
 
         assert_eq!(
@@ -884,7 +901,8 @@ mod tests {
                     },
                 ],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
     }
 
@@ -899,7 +917,8 @@ mod tests {
                     value: None,
                 }],
                 self_closing: true,
-            }),])
+            }),]
+            .as_ref())
         );
     }
 
@@ -931,7 +950,7 @@ mod tests {
     fn test_comment_tag() {
         assert_eq!(
             Tokenizer::new("<!--comment-->").tokenize(),
-            Ok(vec![Token::Comment("comment".to_owned()),])
+            Ok(vec![Token::Comment("comment".to_owned()),].as_ref())
         );
 
         let comment = r#"<!--
@@ -944,7 +963,8 @@ mod tests {
             Tokenizer::new(comment).tokenize(),
             Ok(vec![Token::Comment(
                 "\n        this\n        is\n        comment\n        ".to_owned()
-            ),])
+            ),]
+            .as_ref())
         );
     }
 
@@ -971,13 +991,13 @@ mod tests {
     fn test_doc_type_tag() {
         assert_eq!(
             Tokenizer::new("<!doctype>").tokenize(),
-            Ok(vec![Token::DocTypeTag]),
+            Ok(vec![Token::DocTypeTag].as_ref()),
         );
 
         // allow case insensitive "doctype"
         assert_eq!(
             Tokenizer::new("<!Doctype>").tokenize(),
-            Ok(vec![Token::DocTypeTag]),
+            Ok(vec![Token::DocTypeTag].as_ref()),
         );
 
         assert_eq!(
@@ -986,7 +1006,8 @@ mod tests {
                 Token::Text("test1".to_owned()),
                 Token::DocTypeTag,
                 Token::Text("test2".to_owned()),
-            ]),
+            ]
+            .as_ref()),
         );
     }
 
@@ -1093,7 +1114,8 @@ comment start
                 Token::CloseTag("body".to_owned()),
                 new_line_text(),
                 Token::CloseTag("html".to_owned()),
-            ]),
+            ]
+            .as_ref()),
         );
     }
 }
