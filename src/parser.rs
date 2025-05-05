@@ -1,5 +1,13 @@
 use regex::Regex;
-use std::{borrow::Cow, error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Chars};
+use std::{
+    borrow::Cow, error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Chars,
+    sync::OnceLock,
+};
+
+const START_TAG_RE_STR: &'static str = r"^<[a-z][a-z0-9.-]*(-[a-z0-9.-]+)?";
+const END_TAG_RE_STR: &'static str = r"^</[a-z][a-z0-9.-]*(-[a-z0-9.-]+)?\s*>";
+const START_TAG_RE: OnceLock<Regex> = OnceLock::new();
+const END_TAG_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -245,6 +253,9 @@ type TokenizeResult<'a, T> = Result<T, WithLoc<TokenizeError<'a>>>;
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
+        let _ = START_TAG_RE.get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap());
+        let _ = END_TAG_RE.get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap());
+
         Self {
             input: Input::new(src),
             token_loc: Loc::default(),
@@ -582,7 +593,15 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_text(&mut self, ch: char) -> TokenizeResult<'a, ()> {
-        if ch == '<' {
+        if ch == '<'
+            || START_TAG_RE
+                .get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap())
+                .is_match(self.input.remaining())
+            || END_TAG_RE
+                .get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap())
+                .is_match(self.input.remaining())
+            || self.input.starts_with("<!")
+        {
             self.state = TokenizerState::TagOpen;
         } else {
             self.text.push(ch);
