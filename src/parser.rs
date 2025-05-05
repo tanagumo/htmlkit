@@ -4,10 +4,13 @@ use std::{
     sync::OnceLock,
 };
 
-const START_TAG_RE_STR: &'static str = r"^<[a-z][a-z0-9.-]*(-[a-z0-9.-]+)?";
-const END_TAG_RE_STR: &'static str = r"^</[a-z][a-z0-9.-]*(-[a-z0-9.-]+)?\s*>";
+const START_TAG_RE_STR: &'static str = r"^<[A-Za-z][A-Za-z0-9:._-]*";
+const END_TAG_RE_STR: &'static str = r"^</[A-Za-z][A-Za-z0-9:._-]*\s*>";
+const TAG_ATTR_RE_STR: &'static str = r"^[a-zA-Z_:][a-zA-Z0-9:._-]*$";
+
 const START_TAG_RE: OnceLock<Regex> = OnceLock::new();
 const END_TAG_RE: OnceLock<Regex> = OnceLock::new();
+const TAG_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -255,6 +258,7 @@ impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
         let _ = START_TAG_RE.get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap());
         let _ = END_TAG_RE.get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap());
+        let _ = TAG_ATTR_RE.get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap());
 
         Self {
             input: Input::new(src),
