@@ -104,8 +104,8 @@ pub enum Token {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Pos {
-    row: u32,
-    col: u16,
+    row: usize,
+    col: usize,
 }
 
 impl Pos {
