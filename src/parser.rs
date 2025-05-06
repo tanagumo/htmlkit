@@ -107,11 +107,11 @@ impl<'a> OpenTagBuilder<'a> {
         }
     }
 
-    fn set_name_span(&mut self, name_span: Span) {
+    fn set_name_span(&mut self, name_span: impl Into<Span>) {
         if self.name_span.is_some() {
             panic!("`name_span` is already set");
         }
-        self.name_span = Some(name_span);
+        self.name_span = Some(name_span.into());
     }
 
     fn add_attr_name(&mut self, name: &'a str) {
@@ -283,7 +283,7 @@ pub struct Tokenizer<'a> {
     input: Input<'a>,
     state: TokenizerState,
     is_end_tag: bool,
-    tag_name_pos: Vec<usize>,
+    tag_name_span: LimitedUpdatableSpan,
     tag_attr_name_pos: Vec<usize>,
     tag_value_pos: Vec<usize>,
     text_pos: Vec<usize>,
@@ -305,7 +305,7 @@ impl<'a> Tokenizer<'a> {
             input: Input::new(src),
             state: TokenizerState::Text,
             is_end_tag: false,
-            tag_name_pos: Vec::with_capacity(128),
+            tag_name_span: LimitedUpdatableSpan::default(),
             tag_attr_name_pos: Vec::with_capacity(128),
             comment_pos: Vec::with_capacity(128),
             tag_value_pos: Vec::with_capacity(128),
@@ -516,7 +516,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_end_tag_open(&mut self, _ch: char) -> TokenizeResult<'a, ()> {
         self.state = TokenizerState::TagName;
-        self.tag_name_pos.push(self.input.pos);
+        self.tag_name_span.set(self.input.pos);
         self.advance();
         Ok(())
     }
@@ -579,14 +579,11 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '>' || ch.is_whitespace() {
+            self.tag_name_span.set(self.input.pos);
+
             let token_finalized = ch == '>';
 
-            let tag_name_span = {
-                let first = self.tag_name_pos[0];
-                let last = *self.tag_name_pos.last().unwrap();
-                self.tag_name_pos.clear();
-                Span(first, last + 1)
-            };
+            let tag_name_span = Into::<Span>::into(self.tag_name_span);
             let tag_name = &self.input.src[Into::<Range<usize>>::into(tag_name_span)];
 
             if let None = self.re_for_tag_name.captures(&tag_name) {
@@ -596,13 +593,11 @@ impl<'a> Tokenizer<'a> {
                 ));
             }
             if self.is_end_tag {
-                self.tokens.push(Token::CloseTag(tag_name.into()));
+                self.finalize_close_tag(tag_name);
             } else {
-                self.open_tag_builder.set_name_span(tag_name_span.into());
+                self.open_tag_builder.set_name_span(self.tag_name_span);
                 if token_finalized {
-                    self.tokens.push(Token::OpenTag(
-                        self.open_tag_builder.build(&self.input, false),
-                    ));
+                    self.finalize_open_tag(false);
                 }
             }
             self.state = if token_finalized {
@@ -612,8 +607,6 @@ impl<'a> Tokenizer<'a> {
             } else {
                 TokenizerState::BeforeTagAttr
             };
-        } else {
-            self.tag_name_pos.push(self.input.pos);
         }
 
         self.advance();
@@ -640,7 +633,7 @@ impl<'a> Tokenizer<'a> {
                 self.is_end_tag = true;
             } else {
                 self.state = TokenizerState::TagName;
-                self.tag_name_pos.push(self.input.pos);
+                self.tag_name_span.set(self.input.pos);
                 self.is_end_tag = false;
             }
         }
@@ -692,6 +685,12 @@ impl<'a> Tokenizer<'a> {
         self.tokens.push(Token::OpenTag(
             self.open_tag_builder.build(&self.input, self_closing),
         ));
+        self.tag_name_span = LimitedUpdatableSpan::default();
+    }
+
+    fn finalize_close_tag(&mut self, tag_name: &'a str) {
+        self.tokens.push(Token::CloseTag(tag_name));
+        self.tag_name_span = LimitedUpdatableSpan::default();
     }
 
     fn advance(&mut self) -> bool {
