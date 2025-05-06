@@ -285,8 +285,8 @@ pub struct Tokenizer<'a> {
     input: Input<'a>,
     state: TokenizerState,
     is_end_tag: bool,
-    tag_attr_name_pos: Vec<usize>,
     tag_name_span: GrowingSpan,
+    tag_attr_name_span: GrowingSpan,
     tag_value_pos: Vec<usize>,
     text_pos: Vec<usize>,
     comment_pos: Vec<usize>,
@@ -307,8 +307,8 @@ impl<'a> Tokenizer<'a> {
             input: Input::new(src),
             state: TokenizerState::Text,
             is_end_tag: false,
-            tag_attr_name_pos: Vec::with_capacity(128),
             tag_name_span: GrowingSpan::default(),
+            tag_attr_name_span: GrowingSpan::default(),
             comment_pos: Vec::with_capacity(128),
             tag_value_pos: Vec::with_capacity(128),
             text_pos: Vec::with_capacity(512),
@@ -384,7 +384,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::SelfClosingTagSlash;
             }
             ch if !ch.is_whitespace() => {
-                self.tag_attr_name_pos.push(self.input.pos);
+                self.tag_attr_name_span.set(self.input.pos);
                 self.state = TokenizerState::TagAttr;
             }
             _ => {}
@@ -405,7 +405,7 @@ impl<'a> Tokenizer<'a> {
             }
             ch => {
                 if !ch.is_whitespace() {
-                    self.tag_attr_name_pos.push(self.input.pos);
+                    self.tag_attr_name_span.set(self.input.pos);
                     self.state = TokenizerState::TagAttr;
                 }
             }
@@ -425,7 +425,7 @@ impl<'a> Tokenizer<'a> {
                 self.state = TokenizerState::SelfClosingTagSlash;
             }
             ch if !ch.is_whitespace() => {
-                self.tag_attr_name_pos.push(self.input.pos);
+                self.tag_attr_name_span.set(self.input.pos);
                 self.state = TokenizerState::TagAttr;
             }
             _ => {}
@@ -547,12 +547,8 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_tag_attr(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '>' || ch == '=' || ch.is_whitespace() {
-            let tag_attr_name_span = {
-                let first = self.tag_attr_name_pos[0];
-                let last = *self.tag_attr_name_pos.last().unwrap();
-                self.tag_attr_name_pos.clear();
-                Span(first, last + 1)
-            };
+            self.tag_attr_name_span.set(self.input.pos);
+            let tag_attr_name_span = Into::<Span>::into(self.tag_attr_name_span);
             let tag_attr_name = &self.input.src[Into::<Range<usize>>::into(tag_attr_name_span)];
             if let None = self.re_for_tag_name.captures(&tag_attr_name) {
                 return Err(WithLoc::new(
@@ -561,6 +557,7 @@ impl<'a> Tokenizer<'a> {
                 ));
             }
             self.open_tag_builder.add_attr_name(tag_attr_name.into());
+            self.tag_attr_name_span = GrowingSpan::default();
             self.state = if ch == '>' {
                 self.finalize_open_tag(false);
                 TokenizerState::Text
@@ -572,7 +569,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::AfterTagAttr
             };
         } else {
-            self.tag_attr_name_pos.push(self.input.pos);
+            self.tag_attr_name_span.set(self.input.pos);
         }
 
         self.advance();
