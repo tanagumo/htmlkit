@@ -49,31 +49,44 @@ impl From<GrowingSpan> for Span {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum TagAttrError<'a> {
+    ValueAlreadySet(&'a str),
+    AttrNotFound,
+}
+
+impl<'a> Display for TagAttrError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TagAttrError::ValueAlreadySet(name) => write!(
+                f,
+                "the value for the tag attribute `{}` is already set",
+                name
+            ),
+            TagAttrError::AttrNotFound => write!(f, "tag attribute is not yet set"),
+        }
+    }
+}
+
+impl<'a> StdError for TagAttrError<'a> {}
+
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TokenizeError<'a> {
-    InvalidTagName(Cow<'a, str>),
-    InvalidTagAttrName(Cow<'a, str>),
-    MalformedEndTag(Cow<'a, str>),
     MalformedSelfClosingTag(Cow<'a, str>),
-    MalformedTagAttr(Cow<'a, str>),
     MalformedCommentTag,
     MalformedDocTypeTag,
+    TagAttrError(TagAttrError<'a>),
 }
 
 impl<'a> Display for TokenizeError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
-            TokenizeError::InvalidTagName(name) => format!("{} is not a valid tag name", name),
-            TokenizeError::InvalidTagAttrName(name) => {
-                format!("{} is not a valid tag attr name", name)
-            }
-            TokenizeError::MalformedEndTag(reason) => format!("malformed end tag. ({})", reason),
             TokenizeError::MalformedSelfClosingTag(reason) => {
                 format!("malformed self closing tag. ({})", reason)
             }
-            TokenizeError::MalformedTagAttr(reason) => format!("{}", reason),
             TokenizeError::MalformedCommentTag => format!("malformed comment tag"),
             TokenizeError::MalformedDocTypeTag => format!("malformed doctype tag"),
+            TokenizeError::TagAttrError(err) => format!("{}", err),
         };
 
         write!(f, "tokenize error. ({})", message)
@@ -121,20 +134,18 @@ impl<'a> OpenTagBuilder<'a> {
         self.tag_attrs.push(attr);
     }
 
-    fn set_attr_value(&mut self, value: &'a str) -> Result<&mut Self, TokenizeError<'static>> {
+    fn set_attr_value(&mut self, value: &'a str) -> Result<&mut Self, TokenizeError<'a>> {
         if let Some(attr) = self.tag_attrs.last_mut() {
             if attr.value.is_some() {
-                Err(TokenizeError::MalformedTagAttr(Cow::Borrowed(
-                    "the attr for the value is already set a name",
+                Err(TokenizeError::TagAttrError(TagAttrError::ValueAlreadySet(
+                    attr.name,
                 )))
             } else {
                 attr.value = Some(value);
                 Ok(self)
             }
         } else {
-            Err(TokenizeError::MalformedTagAttr(Cow::Borrowed(
-                "tag name for the value does not exist",
-            )))
+            Err(TokenizeError::TagAttrError(TagAttrError::AttrNotFound))
         }
     }
 
@@ -354,19 +365,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_after_end_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
-        match ch {
-            '>' => {
-                self.state = TokenizerState::Text;
-            }
-            _ => {
-                if !ch.is_whitespace() {
-                    return Err(WithLoc::new(
-                        TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                        self.input.loc,
-                    ));
-                }
-            }
-        }
+        self.state = TokenizerState::Text;
         self.advance();
         Ok(())
     }
@@ -548,12 +547,16 @@ impl<'a> Tokenizer<'a> {
             self.tag_attr_name_span.set(self.input.pos);
             let tag_attr_name_span = Into::<Span>::into(self.tag_attr_name_span);
             let tag_attr_name = &self.input.src[Into::<Range<usize>>::into(tag_attr_name_span)];
-            if let None = self.re_for_tag_name.captures(&tag_attr_name) {
-                return Err(WithLoc::new(
-                    TokenizeError::InvalidTagAttrName(Cow::Borrowed(tag_attr_name)),
-                    self.input.loc,
-                ));
+
+            if !TAG_ATTR_RE
+                .get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap())
+                .is_match(&tag_attr_name)
+            {
+                self.state = TokenizerState::Text;
+                self.advance();
+                return Ok(());
             }
+
             self.open_tag_builder.add_attr_name(tag_attr_name.into());
             self.tag_attr_name_span = GrowingSpan::default();
             self.state = if ch == '>' {
@@ -583,12 +586,6 @@ impl<'a> Tokenizer<'a> {
             let tag_name_span = Into::<Span>::into(self.tag_name_span);
             let tag_name = &self.input.src[Into::<Range<usize>>::into(tag_name_span)];
 
-            if let None = self.re_for_tag_name.captures(&tag_name) {
-                return Err(WithLoc::new(
-                    TokenizeError::InvalidTagName(Cow::Owned(tag_name.into())),
-                    self.input.loc,
-                ));
-            }
             if self.is_end_tag {
                 self.finalize_close_tag(tag_name);
             } else {
@@ -645,9 +642,19 @@ impl<'a> Tokenizer<'a> {
             let tag_value = &self.input.src[Into::<Range<usize>>::into(tag_value_span)];
             self.tag_value_span = GrowingSpan::default();
 
-            self.open_tag_builder
-                .set_attr_value(tag_value)
-                .map_err(|e| WithLoc::new(e, self.input.loc))?;
+            if let Err(e) = self.open_tag_builder.set_attr_value(tag_value) {
+                match e {
+                    TokenizeError::TagAttrError(_) => {
+                        self.state = TokenizerState::Text;
+                        self.advance();
+                        return Ok(());
+                    }
+                    _ => {
+                        unreachable!("the error set_attr_value returns should be TagAttrError")
+                    }
+                }
+            }
+
             self.state = TokenizerState::AfterTagValue;
         } else {
             self.tag_value_span.set(self.input.pos);
@@ -797,36 +804,36 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_invalid_tag_name() {
-        // invalid tag name
-        assert_eq!(
-            Tokenizer::new("<2a></tag>").tokenize(),
-            Err(WithLoc::new(
-                TokenizeError::InvalidTagName(Cow::Borrowed("2a")),
-                Loc { row: 0, col: 3 }
-            ))
-        );
+    // #[test]
+    // fn test_invalid_tag_name() {
+    //     // invalid tag name
+    //     assert_eq!(
+    //         Tokenizer::new("<2a></tag>").tokenize(),
+    //         Err(WithLoc::new(
+    //             TokenizeError::InvalidTagName(Cow::Borrowed("2a")),
+    //             Loc { row: 0, col: 3 }
+    //         ))
+    //     );
 
-        assert_eq!(
-            Tokenizer::new("<tag></3b>").tokenize(),
-            Err(WithLoc::new(
-                TokenizeError::InvalidTagName(Cow::Borrowed("3b")),
-                Loc { row: 0, col: 9 }
-            ))
-        );
-    }
+    //     assert_eq!(
+    //         Tokenizer::new("<tag></3b>").tokenize(),
+    //         Err(WithLoc::new(
+    //             TokenizeError::InvalidTagName(Cow::Borrowed("3b")),
+    //             Loc { row: 0, col: 9 }
+    //         ))
+    //     );
+    // }
 
-    #[test]
-    fn test_invalid_tag_name_with_line_break() {
-        assert_eq!(
-            Tokenizer::new("<tag>\n</999999a>").tokenize(),
-            Err(WithLoc::new(
-                TokenizeError::InvalidTagName(Cow::Borrowed("999999a")),
-                Loc { row: 1, col: 9 }
-            ))
-        );
-    }
+    // #[test]
+    // fn test_invalid_tag_name_with_line_break() {
+    //     assert_eq!(
+    //         Tokenizer::new("<tag>\n</999999a>").tokenize(),
+    //         Err(WithLoc::new(
+    //             TokenizeError::InvalidTagName(Cow::Borrowed("999999a")),
+    //             Loc { row: 1, col: 9 }
+    //         ))
+    //     );
+    // }
 
     #[test]
     fn test_tag_with_tag_attr() {
@@ -872,16 +879,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tag_with_invalid_tag_attr_name() {
-        assert_eq!(
-            Tokenizer::new("<tag 3attr></tag>").tokenize(),
-            Err(WithLoc::new(
-                TokenizeError::InvalidTagAttrName(Cow::Borrowed("3attr")),
-                Loc { row: 0, col: 10 }
-            ))
-        );
-    }
+    // #[test]
+    // fn test_tag_with_invalid_tag_attr_name() {
+    //     assert_eq!(
+    //         Tokenizer::new("<tag 3attr></tag>").tokenize(),
+    //         Err(WithLoc::new(
+    //             TokenizeError::InvalidTagAttrName(Cow::Borrowed("3attr")),
+    //             Loc { row: 0, col: 10 }
+    //         ))
+    //     );
+    // }
 
     #[test]
     fn test_tag_with_attr_and_value() {
@@ -944,16 +951,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_malformed_end_tag() {
-        assert_eq!(
-            Tokenizer::new("<tag attr1=\"value1\">line1\nline2</tag attr>").tokenize(),
-            Err(WithLoc::new(
-                TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
-                Loc { row: 1, col: 11 }
-            ))
-        );
-    }
+    // #[test]
+    // fn test_malformed_end_tag() {
+    //     assert_eq!(
+    //         Tokenizer::new("<tag attr1=\"value1\">line1\nline2</tag attr>").tokenize(),
+    //         Err(WithLoc::new(
+    //             TokenizeError::MalformedEndTag(Cow::Borrowed("end tag can only have name")),
+    //             Loc { row: 1, col: 11 }
+    //         ))
+    //     );
+    // }
 
     #[test]
     fn test_simple_self_closing_tag() {
