@@ -130,7 +130,7 @@ impl<'a> OpenTagBuilder<'a> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token<'a> {
     OpenTag(OpenTag<'a>),
-    Comment(Cow<'a, str>),
+    Comment(&'a str),
     Text(&'a str),
     CloseTag(Cow<'a, str>),
     DocTypeTag,
@@ -268,10 +268,10 @@ pub struct Tokenizer<'a> {
     tag_attr_name_pos: Vec<usize>,
     tag_value_pos: Vec<usize>,
     text_pos: Vec<usize>,
+    comment_pos: Vec<usize>,
     re_for_tag_name: Regex,
     tokens: Vec<Token<'a>>,
     open_tag_builder: OpenTagBuilder<'a>,
-    comment: String,
 }
 
 type TokenizeResult<'a, T> = Result<T, WithLoc<TokenizeError<'a>>>;
@@ -288,12 +288,12 @@ impl<'a> Tokenizer<'a> {
             is_end_tag: false,
             tag_name_pos: Vec::with_capacity(128),
             tag_attr_name_pos: Vec::with_capacity(128),
+            comment_pos: Vec::with_capacity(128),
             tag_value_pos: Vec::with_capacity(128),
             text_pos: Vec::with_capacity(512),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
             open_tag_builder: OpenTagBuilder::new(),
-            comment: String::new(),
         }
     }
 
@@ -431,12 +431,20 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_comment(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '-' {
-            let comment = mem::take(&mut self.comment);
             if self.input.starts_with("-->") {
                 self.advance();
                 self.advance();
                 self.advance();
-                self.tokens.push(Token::Comment(comment.into()));
+
+                let comment_span = {
+                    let first = self.comment_pos[0];
+                    let last = *self.comment_pos.last().unwrap();
+                    self.comment_pos.clear();
+                    Span(first, last + 1)
+                };
+                let comment = &self.input.src[Into::<Range<usize>>::into(comment_span)];
+
+                self.tokens.push(Token::Comment(comment));
                 self.state = TokenizerState::Text;
             } else {
                 return Err(WithLoc::new(
@@ -445,7 +453,7 @@ impl<'a> Tokenizer<'a> {
                 ));
             }
         } else {
-            self.comment.push(ch);
+            self.comment_pos.push(self.input.pos);
             self.advance();
         }
         Ok(())
@@ -753,7 +761,7 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::Text("before "),
-                Token::Comment(" comment ".to_owned().into()),
+                Token::Comment(" comment "),
                 Token::Text(" after"),
                 Token::CloseTag("tag".to_owned().into()),
             ]
@@ -1073,7 +1081,7 @@ mod tests {
     fn test_comment_tag() {
         assert_eq!(
             Tokenizer::new("<!--comment-->").tokenize(),
-            Ok(vec![Token::Comment("comment".to_owned().into()),].as_ref())
+            Ok(vec![Token::Comment("comment"),].as_ref())
         );
 
         let comment = r#"<!--
@@ -1086,8 +1094,6 @@ mod tests {
             Tokenizer::new(comment).tokenize(),
             Ok(vec![Token::Comment(
                 "\n        this\n        is\n        comment\n        "
-                    .to_owned()
-                    .into()
             ),]
             .as_ref())
         );
@@ -1214,9 +1220,7 @@ comment start
             Token::CloseTag("p".to_owned().into()),
             new_line_text(),
             Token::Comment(
-                "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n"
-                    .to_owned()
-                    .into(),
+                "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n",
             ),
             new_line_text(),
             Token::OpenTag(OpenTag {
