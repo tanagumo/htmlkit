@@ -659,13 +659,13 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_text(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '<'
-            || START_TAG_RE
+            && (START_TAG_RE
                 .get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap())
                 .is_match(self.input.remaining())
-            || END_TAG_RE
-                .get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap())
-                .is_match(self.input.remaining())
-            || self.input.starts_with("<!")
+                || END_TAG_RE
+                    .get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap())
+                    .is_match(self.input.remaining())
+                || self.input.starts_with("<!"))
         {
             self.state = TokenizerState::TagOpen;
         } else {
