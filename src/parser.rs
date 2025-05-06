@@ -262,7 +262,6 @@ enum TokenizerState {
 #[derive(Debug)]
 pub struct Tokenizer<'a> {
     input: Input<'a>,
-    token_loc: Loc,
     state: TokenizerState,
     is_end_tag: bool,
     tag_name_pos: Vec<usize>,
@@ -285,7 +284,6 @@ impl<'a> Tokenizer<'a> {
 
         Self {
             input: Input::new(src),
-            token_loc: Loc::default(),
             state: TokenizerState::Text,
             is_end_tag: false,
             tag_name_pos: Vec::with_capacity(128),
