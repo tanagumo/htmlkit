@@ -132,7 +132,7 @@ pub enum Token<'a> {
     OpenTag(OpenTag<'a>),
     Comment(&'a str),
     Text(&'a str),
-    CloseTag(Cow<'a, str>),
+    CloseTag(&'a str),
     DocTypeTag,
 }
 
@@ -727,7 +727,7 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -744,7 +744,7 @@ mod tests {
                     self_closing: false,
                 }),
                 Token::Text("abc>hoge"),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -763,7 +763,7 @@ mod tests {
                 Token::Text("before "),
                 Token::Comment(" comment "),
                 Token::Text(" after"),
-                Token::CloseTag("tag".to_owned().into()),
+                Token::CloseTag("tag"),
             ]
             .as_ref())
         );
@@ -779,7 +779,7 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -829,7 +829,7 @@ mod tests {
                     }],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -854,7 +854,7 @@ mod tests {
                     ],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -884,7 +884,7 @@ mod tests {
                     }],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -901,7 +901,7 @@ mod tests {
                     }],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -926,7 +926,7 @@ mod tests {
                     ],
                     self_closing: false,
                 }),
-                Token::CloseTag("tag".to_owned().into())
+                Token::CloseTag("tag")
             ]
             .as_ref())
         );
@@ -1201,9 +1201,9 @@ comment start
                 self_closing: false,
             }),
             Token::Text("test html"),
-            Token::CloseTag("title".to_owned().into()),
+            Token::CloseTag("title"),
             new_line_text(),
-            Token::CloseTag("head".to_owned().into()),
+            Token::CloseTag("head"),
             new_line_text(),
             Token::OpenTag(OpenTag {
                 name: "body",
@@ -1217,7 +1217,7 @@ comment start
                 self_closing: false,
             }),
             Token::Text("this is p tag"),
-            Token::CloseTag("p".to_owned().into()),
+            Token::CloseTag("p"),
             new_line_text(),
             Token::Comment(
                 "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n",
@@ -1240,11 +1240,11 @@ comment start
                 }],
                 self_closing: false,
             }),
-            Token::CloseTag("custom".to_owned().into()),
+            Token::CloseTag("custom"),
             new_line_text(),
-            Token::CloseTag("body".to_owned().into()),
+            Token::CloseTag("body"),
             new_line_text(),
-            Token::CloseTag("html".to_owned().into()),
+            Token::CloseTag("html"),
         ];
 
         assert_eq!(actual, Ok(expected.as_ref()));
