@@ -131,7 +131,7 @@ impl<'a> OpenTagBuilder<'a> {
 pub enum Token<'a> {
     OpenTag(OpenTag<'a>),
     Comment(Cow<'a, str>),
-    Text(Cow<'a, str>),
+    Text(&'a str),
     CloseTag(Cow<'a, str>),
     DocTypeTag,
 }
@@ -267,7 +267,7 @@ pub struct Tokenizer<'a> {
     tag_name_pos: Vec<usize>,
     tag_attr_name_pos: Vec<usize>,
     tag_value_pos: Vec<usize>,
-    text: String,
+    text_pos: Vec<usize>,
     re_for_tag_name: Regex,
     tokens: Vec<Token<'a>>,
     open_tag_builder: OpenTagBuilder<'a>,
@@ -289,7 +289,7 @@ impl<'a> Tokenizer<'a> {
             tag_name_pos: Vec::with_capacity(128),
             tag_attr_name_pos: Vec::with_capacity(128),
             tag_value_pos: Vec::with_capacity(128),
-            text: String::new(),
+            text_pos: Vec::with_capacity(512),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
             open_tag_builder: OpenTagBuilder::new(),
@@ -318,9 +318,15 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        if !self.text.is_empty() {
-            let text = mem::take(&mut self.text);
-            self.tokens.push(Token::Text(text.into()));
+        if !self.text_pos.is_empty() {
+            let text_span = {
+                let first = self.text_pos[0];
+                let last = *self.text_pos.last().unwrap();
+                self.text_pos.clear();
+                Span(first, last + 1)
+            };
+            let text = &self.input.src[Into::<Range<usize>>::into(text_span)];
+            self.tokens.push(Token::Text(text));
         }
 
         Ok(&self.tokens)
@@ -588,9 +594,15 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_open(&mut self, ch: char) -> TokenizeResult<'a, ()> {
-        if !self.text.is_empty() {
-            let text = mem::take(&mut self.text);
-            self.tokens.push(Token::Text(text.into()));
+        if !self.text_pos.is_empty() {
+            let text_span = {
+                let first = self.text_pos[0];
+                let last = *self.text_pos.last().unwrap();
+                self.text_pos.clear();
+                Span(first, last + 1)
+            };
+            let text = &self.input.src[Into::<Range<usize>>::into(text_span)];
+            self.tokens.push(Token::Text(text));
         }
 
         if ch == '!' {
@@ -643,7 +655,7 @@ impl<'a> Tokenizer<'a> {
         {
             self.state = TokenizerState::TagOpen;
         } else {
-            self.text.push(ch);
+            self.text_pos.push(self.input.pos);
         }
         self.advance();
         Ok(())
@@ -723,7 +735,7 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::Text("abc>hoge".to_owned().into()),
+                Token::Text("abc>hoge"),
                 Token::CloseTag("tag".to_owned().into())
             ]
             .as_ref())
@@ -740,9 +752,9 @@ mod tests {
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Token::Text("before ".to_owned().into()),
+                Token::Text("before "),
                 Token::Comment(" comment ".to_owned().into()),
-                Token::Text(" after".to_owned().into()),
+                Token::Text(" after"),
                 Token::CloseTag("tag".to_owned().into()),
             ]
             .as_ref())
@@ -1116,9 +1128,9 @@ mod tests {
         assert_eq!(
             Tokenizer::new("test1<!Doctype>test2").tokenize(),
             Ok(vec![
-                Token::Text("test1".to_owned().into()),
+                Token::Text("test1"),
                 Token::DocTypeTag,
-                Token::Text("test2".to_owned().into()),
+                Token::Text("test2"),
             ]
             .as_ref()),
         );
@@ -1157,7 +1169,7 @@ comment start
         .trim();
 
         fn new_line_text() -> Token<'static> {
-            Token::Text("\n".to_owned().into())
+            Token::Text("\n")
         }
 
         let mut tk = Tokenizer::new(html);
@@ -1182,7 +1194,7 @@ comment start
                 tag_attrs: vec![],
                 self_closing: false,
             }),
-            Token::Text("test html".to_owned().into()),
+            Token::Text("test html"),
             Token::CloseTag("title".to_owned().into()),
             new_line_text(),
             Token::CloseTag("head".to_owned().into()),
@@ -1198,7 +1210,7 @@ comment start
                 tag_attrs: vec![],
                 self_closing: false,
             }),
-            Token::Text("this is p tag".to_owned().into()),
+            Token::Text("this is p tag"),
             Token::CloseTag("p".to_owned().into()),
             new_line_text(),
             Token::Comment(
