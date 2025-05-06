@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::{
-    borrow::Cow, error::Error as StdError, fmt::Display, iter::Peekable, mem, str::Chars,
-    sync::OnceLock,
+    borrow::Cow, error::Error as StdError, fmt::Display, iter::Peekable, mem, ops::Range,
+    str::Chars, sync::OnceLock,
 };
 
 const START_TAG_RE_STR: &'static str = r"^<[A-Za-z][A-Za-z0-9:._-]*";
@@ -11,6 +11,21 @@ const TAG_ATTR_RE_STR: &'static str = r"^[a-zA-Z_:][a-zA-Z0-9:._-]*$";
 const START_TAG_RE: OnceLock<Regex> = OnceLock::new();
 const END_TAG_RE: OnceLock<Regex> = OnceLock::new();
 const TAG_ATTR_RE: OnceLock<Regex> = OnceLock::new();
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct Span(usize, usize);
+
+impl From<(usize, usize)> for Span {
+    fn from(value: (usize, usize)) -> Self {
+        Self(value.0, value.1)
+    }
+}
+
+impl Into<Range<usize>> for Span {
+    fn into(self) -> Range<usize> {
+        self.0..self.1
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -54,23 +69,30 @@ pub struct TagAttr<'a> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct OpenTag<'a> {
-    name: Cow<'a, str>,
+    name: &'a str,
     tag_attrs: Vec<TagAttr<'a>>,
     self_closing: bool,
 }
 
 #[derive(Debug)]
 struct OpenTagBuilder<'a> {
-    name: Cow<'a, str>,
+    name_span: Option<Span>,
     tag_attrs: Vec<TagAttr<'a>>,
 }
 
 impl<'a> OpenTagBuilder<'a> {
-    fn new(name: Cow<'a, str>) -> Self {
+    fn new() -> Self {
         Self {
-            name,
-            tag_attrs: vec![],
+            name_span: None,
+            tag_attrs: Vec::with_capacity(128),
         }
+    }
+
+    fn set_name_span(&mut self, name_span: Span) {
+        if self.name_span.is_some() {
+            panic!("`name_span` is already set");
+        }
+        self.name_span = Some(name_span);
     }
 
     fn add_attr_name(&mut self, name: Cow<'a, str>) {
@@ -95,10 +117,11 @@ impl<'a> OpenTagBuilder<'a> {
         }
     }
 
-    fn build(self, self_closing: bool) -> OpenTag<'a> {
+    fn build(&mut self, input: &Input<'a>, self_closing: bool) -> OpenTag<'a> {
+        let ns = self.name_span.take().unwrap();
         OpenTag {
-            name: self.name,
-            tag_attrs: self.tag_attrs,
+            name: &input.src[ns.0..ns.1],
+            tag_attrs: mem::take(&mut self.tag_attrs),
             self_closing,
         }
     }
@@ -242,13 +265,13 @@ pub struct Tokenizer<'a> {
     token_loc: Loc,
     state: TokenizerState,
     is_end_tag: bool,
-    tag_name: String,
+    tag_name_pos: Vec<usize>,
     tag_attr_name: String,
     tag_value: String,
     text: String,
     re_for_tag_name: Regex,
     tokens: Vec<Token<'a>>,
-    open_tag_builder: Option<OpenTagBuilder<'a>>,
+    open_tag_builder: OpenTagBuilder<'a>,
     comment: String,
 }
 
@@ -265,13 +288,13 @@ impl<'a> Tokenizer<'a> {
             token_loc: Loc::default(),
             state: TokenizerState::Text,
             is_end_tag: false,
-            tag_name: String::new(),
+            tag_name_pos: Vec::with_capacity(128),
             tag_attr_name: String::new(),
             tag_value: String::new(),
             text: String::new(),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
-            open_tag_builder: None,
+            open_tag_builder: OpenTagBuilder::new(),
             comment: String::new(),
         }
     }
@@ -460,9 +483,9 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
-    fn handle_end_tag_open(&mut self, ch: char) -> TokenizeResult<'a, ()> {
+    fn handle_end_tag_open(&mut self, _ch: char) -> TokenizeResult<'a, ()> {
         self.state = TokenizerState::TagName;
-        self.tag_name.push(ch);
+        self.tag_name_pos.push(self.input.pos);
         self.advance();
         Ok(())
     }
@@ -498,10 +521,7 @@ impl<'a> Tokenizer<'a> {
                     self.input.loc,
                 ));
             }
-            self.open_tag_builder
-                .as_mut()
-                .unwrap()
-                .add_attr_name(tag_attr_name.into());
+            self.open_tag_builder.add_attr_name(tag_attr_name.into());
             self.state = if ch == '>' {
                 self.finalize_open_tag(false);
                 TokenizerState::Text
@@ -524,24 +544,28 @@ impl<'a> Tokenizer<'a> {
         if ch == '>' || ch.is_whitespace() {
             let token_finalized = ch == '>';
 
-            let tag = mem::take(&mut self.tag_name);
-            if let None = self.re_for_tag_name.captures(&tag) {
+            let tag_name_span = {
+                let first = self.tag_name_pos[0];
+                let last = *self.tag_name_pos.last().unwrap();
+                self.tag_name_pos.clear();
+                Span(first, last + 1)
+            };
+            let tag_name = &self.input.src[Into::<Range<usize>>::into(tag_name_span)];
+
+            if let None = self.re_for_tag_name.captures(&tag_name) {
                 return Err(WithLoc::new(
-                    TokenizeError::InvalidTagName(Cow::Owned(tag)),
+                    TokenizeError::InvalidTagName(Cow::Owned(tag_name.into())),
                     self.input.loc,
                 ));
             }
             if self.is_end_tag {
-                self.tokens.push(Token::CloseTag(tag.into()));
+                self.tokens.push(Token::CloseTag(tag_name.into()));
             } else {
+                self.open_tag_builder.set_name_span(tag_name_span.into());
                 if token_finalized {
-                    self.tokens.push(Token::OpenTag(OpenTag {
-                        name: tag.into(),
-                        tag_attrs: vec![],
-                        self_closing: false,
-                    }));
-                } else {
-                    self.open_tag_builder = Some(OpenTagBuilder::new(tag.into()));
+                    self.tokens.push(Token::OpenTag(
+                        self.open_tag_builder.build(&self.input, false),
+                    ));
                 }
             }
             self.state = if token_finalized {
@@ -552,7 +576,7 @@ impl<'a> Tokenizer<'a> {
                 TokenizerState::BeforeTagAttr
             };
         } else {
-            self.tag_name.push(ch);
+            self.tag_name_pos.push(self.input.pos);
         }
 
         self.advance();
@@ -573,7 +597,7 @@ impl<'a> Tokenizer<'a> {
                 self.is_end_tag = true;
             } else {
                 self.state = TokenizerState::TagName;
-                self.tag_name.push(ch);
+                self.tag_name_pos.push(self.input.pos);
                 self.is_end_tag = false;
             }
         }
@@ -585,8 +609,6 @@ impl<'a> Tokenizer<'a> {
         if ch == '"' {
             let tag_value = mem::take(&mut self.tag_value);
             self.open_tag_builder
-                .as_mut()
-                .unwrap()
                 .set_attr_value(tag_value.into())
                 .map_err(|e| WithLoc::new(e, self.input.loc))?;
             self.state = TokenizerState::AfterTagValue;
@@ -617,10 +639,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn finalize_open_tag(&mut self, self_closing: bool) {
-        if let Some(builder) = self.open_tag_builder.take() {
-            self.tokens
-                .push(Token::OpenTag(builder.build(self_closing)));
-        }
+        self.tokens.push(Token::OpenTag(
+            self.open_tag_builder.build(&self.input, self_closing),
+        ));
     }
 
     fn advance(&mut self) -> bool {
@@ -671,7 +692,7 @@ mod tests {
             Tokenizer::new("<tag></tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
@@ -687,7 +708,7 @@ mod tests {
             Tokenizer::new("<tag>abc>hoge</tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
@@ -704,7 +725,7 @@ mod tests {
             Tokenizer::new("<tag>before <!-- comment --> after</tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
@@ -723,7 +744,7 @@ mod tests {
             Tokenizer::new("<tag1></tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag1".to_owned().into(),
+                    name: "tag1",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
@@ -770,7 +791,7 @@ mod tests {
             Tokenizer::new("<tag attr></tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned().into(),
                         value: None
@@ -789,7 +810,7 @@ mod tests {
             Tokenizer::new("<tag attr1 attr2></tag>").tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![
                         TagAttr {
                             name: "attr1".to_owned().into(),
@@ -825,7 +846,7 @@ mod tests {
             Tokenizer::new(r#"<tag attr="value"></tag>"#).tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned().into(),
                         value: Some("value".to_owned().into()),
@@ -842,7 +863,7 @@ mod tests {
             Tokenizer::new(r#"<tag attr         = "value"></tag>"#).tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![TagAttr {
                         name: "attr".to_owned().into(),
                         value: Some("value".to_owned().into()),
@@ -861,7 +882,7 @@ mod tests {
             Tokenizer::new(r#"<tag attr1="value1" attr2 = "value2"></tag>"#).tokenize(),
             Ok(vec![
                 Token::OpenTag(OpenTag {
-                    name: "tag".to_owned().into(),
+                    name: "tag",
                     tag_attrs: vec![
                         TagAttr {
                             name: "attr1".to_owned().into(),
@@ -896,7 +917,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag />").tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![],
                 self_closing: true,
             }),]
@@ -909,7 +930,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag attr />").tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![TagAttr {
                     name: "attr".to_owned().into(),
                     value: None,
@@ -922,7 +943,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag attr1 attr2 />").tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![
                     TagAttr {
                         name: "attr1".to_owned().into(),
@@ -944,7 +965,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new(r#"<tag attr1="value1" />"#).tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![TagAttr {
                     name: "attr1".to_owned().into(),
                     value: Some("value1".to_owned().into()),
@@ -957,7 +978,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new(r#"<tag attr1="value1" attr2 = "value2" />"#).tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![
                     TagAttr {
                         name: "attr1".to_owned().into(),
@@ -979,7 +1000,7 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<tag attr /               >").tokenize(),
             Ok(vec![Token::OpenTag(OpenTag {
-                name: "tag".to_owned().into(),
+                name: "tag",
                 tag_attrs: vec![TagAttr {
                     name: "attr".to_owned().into(),
                     value: None,
@@ -1127,77 +1148,78 @@ comment start
         fn new_line_text() -> Token<'static> {
             Token::Text("\n".to_owned().into())
         }
-        assert_eq!(
-            Tokenizer::new(html).tokenize(),
-            Ok(vec![
-                Token::DocTypeTag,
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "html".to_owned().into(),
-                    tag_attrs: vec![],
-                    self_closing: false
-                }),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "head".to_owned().into(),
-                    tag_attrs: vec![],
-                    self_closing: false
-                }),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "title".to_owned().into(),
-                    tag_attrs: vec![],
-                    self_closing: false
-                }),
-                Token::Text("test html".to_owned().into()),
-                Token::CloseTag("title".to_owned().into()),
-                new_line_text(),
-                Token::CloseTag("head".to_owned().into()),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "body".to_owned().into(),
-                    tag_attrs: vec![],
-                    self_closing: false
-                }),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "p".to_owned().into(),
-                    tag_attrs: vec![],
-                    self_closing: false
-                }),
-                Token::Text("this is p tag".to_owned().into()),
-                Token::CloseTag("p".to_owned().into()),
-                new_line_text(),
-                Token::Comment(
-                    "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n"
-                        .to_owned()
-                        .into()
-                ),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "img".to_owned().into(),
-                    tag_attrs: vec![TagAttr {
-                        name: "src".to_owned().into(),
-                        value: Some("test".to_owned().into()),
-                    }],
-                    self_closing: true
-                }),
-                new_line_text(),
-                Token::OpenTag(OpenTag {
-                    name: "custom".to_owned().into(),
-                    tag_attrs: vec![TagAttr {
-                        name: "attr1".to_owned().into(),
-                        value: None,
-                    }],
-                    self_closing: false
-                }),
-                Token::CloseTag("custom".to_owned().into()),
-                new_line_text(),
-                Token::CloseTag("body".to_owned().into()),
-                new_line_text(),
-                Token::CloseTag("html".to_owned().into()),
-            ]
-            .as_ref()),
-        );
+
+        let mut tk = Tokenizer::new(html);
+        let actual = tk.tokenize();
+        let expected = vec![
+            Token::DocTypeTag,
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "html",
+                tag_attrs: vec![],
+                self_closing: false,
+            }),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "head",
+                tag_attrs: vec![],
+                self_closing: false,
+            }),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "title",
+                tag_attrs: vec![],
+                self_closing: false,
+            }),
+            Token::Text("test html".to_owned().into()),
+            Token::CloseTag("title".to_owned().into()),
+            new_line_text(),
+            Token::CloseTag("head".to_owned().into()),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "body",
+                tag_attrs: vec![],
+                self_closing: false,
+            }),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "p",
+                tag_attrs: vec![],
+                self_closing: false,
+            }),
+            Token::Text("this is p tag".to_owned().into()),
+            Token::CloseTag("p".to_owned().into()),
+            new_line_text(),
+            Token::Comment(
+                "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n"
+                    .to_owned()
+                    .into(),
+            ),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "img",
+                tag_attrs: vec![TagAttr {
+                    name: "src".to_owned().into(),
+                    value: Some("test".to_owned().into()),
+                }],
+                self_closing: true,
+            }),
+            new_line_text(),
+            Token::OpenTag(OpenTag {
+                name: "custom",
+                tag_attrs: vec![TagAttr {
+                    name: "attr1".to_owned().into(),
+                    value: None,
+                }],
+                self_closing: false,
+            }),
+            Token::CloseTag("custom".to_owned().into()),
+            new_line_text(),
+            Token::CloseTag("body".to_owned().into()),
+            new_line_text(),
+            Token::CloseTag("html".to_owned().into()),
+        ];
+
+        assert_eq!(actual, Ok(expected.as_ref()));
     }
 }
