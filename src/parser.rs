@@ -321,7 +321,7 @@ impl<'a> Tokenizer<'a> {
     pub fn tokenize(&mut self) -> TokenizeResult<'a, &[Token]> {
         while let Some(ch) = self.peek() {
             match self.state {
-                TokenizerState::AfterEndTagName => self.handle_after_tag_name(ch)?,
+                TokenizerState::AfterEndTagName => self.handle_after_end_tag_name(ch)?,
                 TokenizerState::AfterTagAttr => self.handle_after_tag_attr(ch)?,
                 TokenizerState::AfterTagValue => self.handle_after_tag_value(ch)?,
                 TokenizerState::BeforeTagAttr => self.handle_before_tag_attr(ch)?,
@@ -353,7 +353,7 @@ impl<'a> Tokenizer<'a> {
         Ok(&self.tokens)
     }
 
-    fn handle_after_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
+    fn handle_after_end_tag_name(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         match ch {
             '>' => {
                 self.state = TokenizerState::Text;
