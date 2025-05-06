@@ -192,6 +192,7 @@ pub struct WithLoc<T> {
 }
 
 impl<T> WithLoc<T> {
+    #[allow(dead_code)]
     fn new(value: T, loc: Loc) -> Self {
         Self { value, loc }
     }
@@ -302,13 +303,10 @@ pub struct Tokenizer<'a> {
     tag_value_span: GrowingSpan,
     text_pos: usize,
     comment_span: GrowingSpan,
-    re_for_tag_name: Regex,
     tokens: Vec<Token<'a>>,
     open_tag_builder: OpenTagBuilder<'a>,
     tag_start_pos: usize,
 }
-
-type TokenizeResult<'a, T> = Result<T, WithLoc<TokenizeError<'a>>>;
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
@@ -325,7 +323,6 @@ impl<'a> Tokenizer<'a> {
             comment_span: GrowingSpan::default(),
             tag_value_span: GrowingSpan::default(),
             text_pos: 0,
-            re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
             open_tag_builder: OpenTagBuilder::new(),
             tag_start_pos: 0,
