@@ -289,7 +289,7 @@ pub struct Tokenizer<'a> {
     tag_attr_name_span: GrowingSpan,
     tag_value_span: GrowingSpan,
     text_pos: Vec<usize>,
-    comment_pos: Vec<usize>,
+    comment_span: GrowingSpan,
     re_for_tag_name: Regex,
     tokens: Vec<Token<'a>>,
     open_tag_builder: OpenTagBuilder<'a>,
@@ -309,7 +309,7 @@ impl<'a> Tokenizer<'a> {
             is_end_tag: false,
             tag_name_span: GrowingSpan::default(),
             tag_attr_name_span: GrowingSpan::default(),
-            comment_pos: Vec::with_capacity(128),
+            comment_span: GrowingSpan::default(),
             tag_value_span: GrowingSpan::default(),
             text_pos: Vec::with_capacity(512),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
@@ -453,17 +453,15 @@ impl<'a> Tokenizer<'a> {
     fn handle_comment(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '-' {
             if self.input.starts_with("-->") {
+                self.comment_span.set(self.input.pos);
+
                 self.advance();
                 self.advance();
                 self.advance();
 
-                let comment_span = {
-                    let first = self.comment_pos[0];
-                    let last = *self.comment_pos.last().unwrap();
-                    self.comment_pos.clear();
-                    Span(first, last + 1)
-                };
+                let comment_span = Into::<Span>::into(self.comment_span);
                 let comment = &self.input.src[Into::<Range<usize>>::into(comment_span)];
+                self.comment_span = GrowingSpan::default();
 
                 self.tokens.push(Token::Comment(comment));
                 self.state = TokenizerState::Text;
@@ -474,7 +472,7 @@ impl<'a> Tokenizer<'a> {
                 ));
             }
         } else {
-            self.comment_pos.push(self.input.pos);
+            self.comment_span.set(self.input.pos);
             self.advance();
         }
         Ok(())
