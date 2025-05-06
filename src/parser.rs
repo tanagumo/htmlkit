@@ -27,6 +27,25 @@ impl Into<Range<usize>> for Span {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+struct LimitedUpdatableSpan(Option<usize>, Option<usize>);
+
+impl LimitedUpdatableSpan {
+    fn set(&mut self, value: usize) {
+        if self.0.is_none() {
+            self.0 = Some(value);
+        } else if self.1.is_none() {
+            self.1 = Some(value);
+        }
+    }
+}
+
+impl From<LimitedUpdatableSpan> for Span {
+    fn from(value: LimitedUpdatableSpan) -> Self {
+        Self(value.0.unwrap(), value.1.unwrap())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TokenizeError<'a> {
