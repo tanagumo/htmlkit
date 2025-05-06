@@ -27,21 +27,23 @@ impl Into<Range<usize>> for Span {
     }
 }
 
+/// A span that starts with the first recorded position
+/// and keeps updating its end position as input progresses.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
-struct LimitedUpdatableSpan(Option<usize>, Option<usize>);
+struct GrowingSpan(Option<usize>, Option<usize>);
 
-impl LimitedUpdatableSpan {
+impl GrowingSpan {
     fn set(&mut self, value: usize) {
         if self.0.is_none() {
             self.0 = Some(value);
-        } else if self.1.is_none() {
+        } else {
             self.1 = Some(value);
         }
     }
 }
 
-impl From<LimitedUpdatableSpan> for Span {
-    fn from(value: LimitedUpdatableSpan) -> Self {
+impl From<GrowingSpan> for Span {
+    fn from(value: GrowingSpan) -> Self {
         Self(value.0.unwrap(), value.1.unwrap())
     }
 }
@@ -283,8 +285,8 @@ pub struct Tokenizer<'a> {
     input: Input<'a>,
     state: TokenizerState,
     is_end_tag: bool,
-    tag_name_span: LimitedUpdatableSpan,
     tag_attr_name_pos: Vec<usize>,
+    tag_name_span: GrowingSpan,
     tag_value_pos: Vec<usize>,
     text_pos: Vec<usize>,
     comment_pos: Vec<usize>,
@@ -305,8 +307,8 @@ impl<'a> Tokenizer<'a> {
             input: Input::new(src),
             state: TokenizerState::Text,
             is_end_tag: false,
-            tag_name_span: LimitedUpdatableSpan::default(),
             tag_attr_name_pos: Vec::with_capacity(128),
+            tag_name_span: GrowingSpan::default(),
             comment_pos: Vec::with_capacity(128),
             tag_value_pos: Vec::with_capacity(128),
             text_pos: Vec::with_capacity(512),
@@ -685,12 +687,12 @@ impl<'a> Tokenizer<'a> {
         self.tokens.push(Token::OpenTag(
             self.open_tag_builder.build(&self.input, self_closing),
         ));
-        self.tag_name_span = LimitedUpdatableSpan::default();
+        self.tag_name_span = GrowingSpan::default();
     }
 
     fn finalize_close_tag(&mut self, tag_name: &'a str) {
         self.tokens.push(Token::CloseTag(tag_name));
-        self.tag_name_span = LimitedUpdatableSpan::default();
+        self.tag_name_span = GrowingSpan::default();
     }
 
     fn advance(&mut self) -> bool {
