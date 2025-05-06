@@ -4,7 +4,7 @@ use std::{
     str::Chars, sync::OnceLock,
 };
 
-const START_TAG_RE_STR: &'static str = r"^<[A-Za-z][A-Za-z0-9:._-]*";
+const START_TAG_RE_STR: &'static str = r"^<[A-Za-z][A-Za-z0-9-]*\b";
 const END_TAG_RE_STR: &'static str = r"^</[A-Za-z][A-Za-z0-9:._-]*\s*>";
 const TAG_ATTR_RE_STR: &'static str = r"^[a-zA-Z_:][a-zA-Z0-9:._-]*$";
 
