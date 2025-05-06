@@ -287,7 +287,7 @@ pub struct Tokenizer<'a> {
     is_end_tag: bool,
     tag_name_span: GrowingSpan,
     tag_attr_name_span: GrowingSpan,
-    tag_value_pos: Vec<usize>,
+    tag_value_span: GrowingSpan,
     text_pos: Vec<usize>,
     comment_pos: Vec<usize>,
     re_for_tag_name: Regex,
@@ -310,7 +310,7 @@ impl<'a> Tokenizer<'a> {
             tag_name_span: GrowingSpan::default(),
             tag_attr_name_span: GrowingSpan::default(),
             comment_pos: Vec::with_capacity(128),
-            tag_value_pos: Vec::with_capacity(128),
+            tag_value_span: GrowingSpan::default(),
             text_pos: Vec::with_capacity(512),
             re_for_tag_name: Regex::new(r"^[a-z]+[[:alnum:]]*$").unwrap(),
             tokens: vec![],
@@ -440,7 +440,7 @@ impl<'a> Tokenizer<'a> {
             '"' => {}
             ch => {
                 if !ch.is_whitespace() {
-                    self.tag_value_pos.push(self.input.pos);
+                    self.tag_value_span.set(self.input.pos);
                     self.state = TokenizerState::TagValue;
                 }
             }
@@ -642,20 +642,17 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_tag_value(&mut self, ch: char) -> TokenizeResult<'a, ()> {
         if ch == '"' {
-            let tag_value_span = {
-                let first = self.tag_value_pos[0];
-                let last = *self.tag_value_pos.last().unwrap();
-                self.tag_value_pos.clear();
-                Span(first, last + 1)
-            };
+            self.tag_value_span.set(self.input.pos);
+            let tag_value_span = Into::<Span>::into(self.tag_value_span);
             let tag_value = &self.input.src[Into::<Range<usize>>::into(tag_value_span)];
+            self.tag_value_span = GrowingSpan::default();
 
             self.open_tag_builder
                 .set_attr_value(tag_value)
                 .map_err(|e| WithLoc::new(e, self.input.loc))?;
             self.state = TokenizerState::AfterTagValue;
         } else {
-            self.tag_value_pos.push(self.input.pos);
+            self.tag_value_span.set(self.input.pos);
         }
 
         self.advance();
