@@ -4,12 +4,10 @@ use std::{
     str::Chars, sync::OnceLock,
 };
 
-const START_TAG_RE_STR: &'static str = r"^<[A-Za-z][A-Za-z0-9-]*\b";
-const END_TAG_RE_STR: &'static str = r"^</[A-Za-z][A-Za-z0-9:._-]*\s*>";
+const TAG_NAME_RE_STR: &'static str = r"^[a-z][a-z0-9.-]*(-[a-z0-9.-]+)?$";
 const TAG_ATTR_RE_STR: &'static str = r"^[a-zA-Z_:][a-zA-Z0-9:._-]*$";
 
-const START_TAG_RE: OnceLock<Regex> = OnceLock::new();
-const END_TAG_RE: OnceLock<Regex> = OnceLock::new();
+const TAG_NAME_RE: OnceLock<Regex> = OnceLock::new();
 const TAG_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -310,8 +308,7 @@ pub struct Tokenizer<'a> {
 
 impl<'a> Tokenizer<'a> {
     pub fn new(src: &'a str) -> Self {
-        let _ = START_TAG_RE.get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap());
-        let _ = END_TAG_RE.get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap());
+        let _ = TAG_NAME_RE.get_or_init(|| Regex::new(TAG_NAME_RE_STR).unwrap());
         let _ = TAG_ATTR_RE.get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap());
 
         Self {
@@ -564,6 +561,16 @@ impl<'a> Tokenizer<'a> {
         if ch == '>' || ch == '/' || ch.is_whitespace() {
             self.tag_name_span.set(self.input.pos);
             let token_finalized = ch == '>';
+            let name_start_pos = self.tag_start_pos + if self.is_end_tag { 2 } else { 1 };
+
+            let tag_name = &self.input.src[name_start_pos..self.input.pos];
+            if !TAG_NAME_RE
+                .get_or_init(|| Regex::new(TAG_NAME_RE_STR).unwrap())
+                .is_match(tag_name)
+            {
+                self.state = TokenizerState::Text;
+                return;
+            }
 
             match (self.is_end_tag, token_finalized) {
                 (true, true) => {
@@ -641,15 +648,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_text(&mut self, ch: char) {
-        if ch == '<'
-            && (START_TAG_RE
-                .get_or_init(|| Regex::new(START_TAG_RE_STR).unwrap())
-                .is_match(self.input.remaining())
-                || END_TAG_RE
-                    .get_or_init(|| Regex::new(END_TAG_RE_STR).unwrap())
-                    .is_match(self.input.remaining())
-                || self.input.starts_with("<!"))
-        {
+        if ch == '<' {
             self.tag_start_pos = self.input.pos;
             self.state = TokenizerState::TagOpen;
         }
@@ -813,8 +812,6 @@ mod tests {
 
     #[test]
     fn test_invalid_tag() {
-        // tag match the regular expression "^<([A-Za-z][A-Za-z0-9-]*)\b"
-
         assert_eq!(
             Tokenizer::new("< tag>").tokenize(),
             vec![Token::Text("< tag>")]
@@ -823,6 +820,11 @@ mod tests {
         assert_eq!(Tokenizer::new("<+>").tokenize(), vec![Token::Text("<+>")]);
 
         assert_eq!(Tokenizer::new("<3a>").tokenize(), vec![Token::Text("<3a>")]);
+
+        assert_eq!(
+            Tokenizer::new("<a~b>").tokenize(),
+            vec![Token::Text("<a~b>")]
+        );
 
         assert_eq!(
             // text + invalid tag
