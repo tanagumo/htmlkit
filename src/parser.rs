@@ -46,6 +46,12 @@ impl From<GrowingSpan> for Span {
     }
 }
 
+impl From<GrowingSpan> for Range<usize> {
+    fn from(value: GrowingSpan) -> Self {
+        value.0.unwrap()..value.1.unwrap()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TagAttrError<'a> {
     ValueAlreadySet(&'a str),
@@ -364,8 +370,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_after_end_tag_name(&mut self, ch: char) {
         if ch == '>' {
-            let tag_name_span = Into::<Span>::into(self.tag_name_span);
-            let tag_name = &self.input.src[Into::<Range<usize>>::into(tag_name_span)];
+            let tag_name = &self.input.src[Into::<Range<usize>>::into(self.tag_name_span)];
             self.finalize_close_tag(tag_name);
             self.state = TokenizerState::Text;
         } else if !ch.is_whitespace() {
@@ -458,8 +463,7 @@ impl<'a> Tokenizer<'a> {
                 self.text_pos = self.input.pos + 3;
 
                 self.comment_span.set(self.input.pos);
-                let comment_span = Into::<Span>::into(self.comment_span);
-                let comment = &self.input.src[Into::<Range<usize>>::into(comment_span)];
+                let comment = &self.input.src[Into::<Range<usize>>::into(self.comment_span)];
                 self.comment_span = GrowingSpan::default();
                 self.tokens.push(Token::Comment(comment));
                 self.state = TokenizerState::AfterComment;
@@ -526,8 +530,8 @@ impl<'a> Tokenizer<'a> {
     fn handle_tag_attr(&mut self, ch: char) {
         if ch == '>' || ch == '=' || ch.is_whitespace() {
             self.tag_attr_name_span.set(self.input.pos);
-            let tag_attr_name_span = Into::<Span>::into(self.tag_attr_name_span);
-            let tag_attr_name = &self.input.src[Into::<Range<usize>>::into(tag_attr_name_span)];
+            let tag_attr_name =
+                &self.input.src[Into::<Range<usize>>::into(self.tag_attr_name_span)];
 
             if !TAG_ATTR_RE
                 .get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap())
@@ -574,8 +578,7 @@ impl<'a> Tokenizer<'a> {
 
             match (self.is_end_tag, token_finalized) {
                 (true, true) => {
-                    let tag_name_span = Into::<Span>::into(self.tag_name_span);
-                    let tag_name = &self.input.src[Into::<Range<usize>>::into(tag_name_span)];
+                    let tag_name = &self.input.src[Into::<Range<usize>>::into(self.tag_name_span)];
                     self.finalize_close_tag(tag_name);
                 }
                 (false, true) => {
@@ -622,8 +625,7 @@ impl<'a> Tokenizer<'a> {
     fn handle_tag_value(&mut self, ch: char) {
         if ch == '"' {
             self.tag_value_span.set(self.input.pos);
-            let tag_value_span = Into::<Span>::into(self.tag_value_span);
-            let tag_value = &self.input.src[Into::<Range<usize>>::into(tag_value_span)];
+            let tag_value = &self.input.src[Into::<Range<usize>>::into(self.tag_value_span)];
             self.tag_value_span = GrowingSpan::default();
 
             if let Err(e) = self.open_tag_builder.set_attr_value(tag_value) {
