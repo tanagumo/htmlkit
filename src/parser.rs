@@ -144,11 +144,38 @@ pub struct TagAttr<'a> {
     value: Option<&'a str>,
 }
 
+impl<'a> Display for TagAttr<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(v) = self.value {
+            write!(f, r#"attr(name={}, value="{}")"#, self.name, v)
+        } else {
+            write!(f, "attr(name={})", self.name)
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct OpenTag<'a> {
     name: &'a str,
     tag_attrs: Vec<TagAttr<'a>>,
     self_closing: bool,
+}
+
+impl<'a> Display for OpenTag<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tag_attrs = self
+            .tag_attrs
+            .iter()
+            .map(|ta| format!("{}", ta))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        write!(
+            f,
+            "tag(name={}, attrs={}, self_closing={})",
+            self.name, tag_attrs, self.self_closing
+        )
+    }
 }
 
 #[derive(Debug)]
