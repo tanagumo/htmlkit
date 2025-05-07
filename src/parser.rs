@@ -398,7 +398,8 @@ impl<'a> Tokenizer<'a> {
 
         let remaining = self.read_input_str(self.text_pos..);
         if !remaining.is_empty() {
-            self.push_token(Token::Text(remaining), self.input.pos - 1);
+            let span = Span(self.next_start_pos(), self.input.pos - 1);
+            self.push_token(Token::Text(remaining), span);
         }
         &self.tokens
     }
@@ -507,7 +508,8 @@ impl<'a> Tokenizer<'a> {
                 self.comment_span.set(self.input.pos);
                 let comment = self.read_input_str(self.comment_span);
                 self.comment_span = GrowingSpan::default();
-                self.push_token(Token::Comment(comment), self.input.pos + 2);
+                let span = Span(self.next_start_pos(), self.input.pos + 2);
+                self.push_token(Token::Comment(comment), span);
                 self.state = TokenizerState::AfterComment;
             }
         }
@@ -709,27 +711,30 @@ impl<'a> Tokenizer<'a> {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
         let token = Token::OpenTag(self.open_tag_builder.build(&self.input, self_closing));
-        self.push_token(token, self.input.pos);
+        self.push_token(token, Span(self.next_start_pos(), self.input.pos));
         self.tag_name_span = GrowingSpan::default();
     }
 
     fn finalize_close_tag(&mut self, tag_name: &'a str) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        self.push_token(Token::CloseTag(tag_name), self.input.pos);
+        let span = Span(self.next_start_pos(), self.input.pos);
+        self.push_token(Token::CloseTag(tag_name), span);
         self.tag_name_span = GrowingSpan::default();
     }
 
     fn finalize_doctype(&mut self) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        self.push_token(Token::DocTypeTag, self.input.pos);
+        let span = Span(self.next_start_pos(), self.input.pos);
+        self.push_token(Token::DocTypeTag, span);
     }
 
     fn finalize_text_if_exist(&mut self, end_pos: usize) {
         let text = self.read_input_str(self.text_pos..end_pos);
         if !text.is_empty() {
-            self.push_token(Token::Text(text), end_pos - 1);
+            let span = Span(self.next_start_pos(), end_pos - 1);
+            self.push_token(Token::Text(text), span);
         }
     }
 
@@ -743,14 +748,16 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn push_token(&mut self, token: Token<'a>, end_pos: usize) {
-        let start = if let Some(t) = self.tokens.last() {
+    fn push_token(&mut self, token: Token<'a>, span: impl Into<Span>) {
+        self.tokens.push(WithSpan::new(token, span.into()));
+    }
+
+    fn next_start_pos(&self) -> usize {
+        if let Some(t) = self.tokens.last() {
             t.span.1 + 1
         } else {
             0
-        };
-
-        self.tokens.push(WithSpan::new(token, Span(start, end_pos)));
+        }
     }
 }
 
