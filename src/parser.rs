@@ -616,7 +616,6 @@ impl<'a> Tokenizer<'a> {
 
             match (self.is_end_tag, token_finalized) {
                 (true, true) => {
-                    let tag_name = self.read_input_str(self.tag_name_span);
                     self.finalize_close_tag(tag_name);
                 }
                 (false, true) => {
