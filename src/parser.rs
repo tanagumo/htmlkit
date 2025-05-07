@@ -139,6 +139,31 @@ impl<'a> Display for TokenizeError<'a> {
 impl<'a> StdError for TokenizeError<'a> {}
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct WithSpan<T> {
+    value: T,
+    span: Span,
+}
+
+impl<T> WithSpan<T> {
+    fn new(value: T, span: Span) -> Self {
+        Self { value, span }
+    }
+}
+
+impl<T> Display for WithSpan<T>
+where
+    T: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} (span=({}, {}))",
+            self.value, self.span.0, self.span.1
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct TagAttr<'a> {
     name: &'a str,
     value: Option<&'a str>,
@@ -324,7 +349,7 @@ pub struct Tokenizer<'a> {
     tag_value_span: GrowingSpan,
     text_pos: usize,
     comment_span: GrowingSpan,
-    tokens: Vec<Token<'a>>,
+    tokens: Vec<WithSpan<Token<'a>>>,
     open_tag_builder: OpenTagBuilder<'a>,
     tag_start_pos: usize,
 }
@@ -349,7 +374,7 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn tokenize(&mut self) -> &[Token<'a>] {
+    pub fn tokenize(&mut self) -> &[WithSpan<Token<'a>>] {
         while let Some(ch) = self.peek() {
             match self.state {
                 TokenizerState::AfterComment => self.handle_after_comment(ch),
@@ -373,7 +398,7 @@ impl<'a> Tokenizer<'a> {
 
         let remaining = self.read_input_str(self.text_pos..);
         if !remaining.is_empty() {
-            self.tokens.push(Token::Text(remaining));
+            self.push_token(Token::Text(remaining), self.input.pos - 1);
         }
         &self.tokens
     }
@@ -482,7 +507,7 @@ impl<'a> Tokenizer<'a> {
                 self.comment_span.set(self.input.pos);
                 let comment = self.read_input_str(self.comment_span);
                 self.comment_span = GrowingSpan::default();
-                self.tokens.push(Token::Comment(comment));
+                self.push_token(Token::Comment(comment), self.input.pos + 2);
                 self.state = TokenizerState::AfterComment;
             }
         }
@@ -683,29 +708,28 @@ impl<'a> Tokenizer<'a> {
     fn finalize_open_tag(&mut self, self_closing: bool) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        self.tokens.push(Token::OpenTag(
-            self.open_tag_builder.build(&self.input, self_closing),
-        ));
+        let token = Token::OpenTag(self.open_tag_builder.build(&self.input, self_closing));
+        self.push_token(token, self.input.pos);
         self.tag_name_span = GrowingSpan::default();
     }
 
     fn finalize_close_tag(&mut self, tag_name: &'a str) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        self.tokens.push(Token::CloseTag(tag_name));
+        self.push_token(Token::CloseTag(tag_name), self.input.pos);
         self.tag_name_span = GrowingSpan::default();
     }
 
     fn finalize_doctype(&mut self) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        self.tokens.push(Token::DocTypeTag);
+        self.push_token(Token::DocTypeTag, self.input.pos);
     }
 
     fn finalize_text_if_exist(&mut self, end_pos: usize) {
         let text = self.read_input_str(self.text_pos..end_pos);
         if !text.is_empty() {
-            self.tokens.push(Token::Text(text));
+            self.push_token(Token::Text(text), end_pos - 1);
         }
     }
 
@@ -717,6 +741,16 @@ impl<'a> Tokenizer<'a> {
             (None, Some(end)) => &self.input.src[..end],
             (None, None) => &self.input.src[..],
         }
+    }
+
+    fn push_token(&mut self, token: Token<'a>, end_pos: usize) {
+        let start = if let Some(t) = self.tokens.last() {
+            t.span.1 + 1
+        } else {
+            0
+        };
+
+        self.tokens.push(WithSpan::new(token, Span(start, end_pos)));
     }
 }
 
@@ -748,71 +782,63 @@ mod tests {
         assert_eq!(input.remaining(), "");
     }
 
+    fn with_span<'a>(token: Token<'a>, span: Span) -> WithSpan<Token<'a>> {
+        WithSpan::new(token, span)
+    }
+
     #[test]
     fn test_tag() {
         assert_eq!(
             Tokenizer::new("<tag>").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(0, 4)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag attr>").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![TagAttr {
-                    name: "attr",
-                    value: None,
-                }],
-                self_closing: false,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![TagAttr {
+                        name: "attr",
+                        value: None,
+                    }],
+                    self_closing: false,
+                }),
+                Span(0, 9)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag attr1  attr2 >").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![
-                    TagAttr {
-                        name: "attr1",
-                        value: None,
-                    },
-                    TagAttr {
-                        name: "attr2",
-                        value: None,
-                    },
-                ],
-                self_closing: false,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![
+                        TagAttr {
+                            name: "attr1",
+                            value: None,
+                        },
+                        TagAttr {
+                            name: "attr2",
+                            value: None,
+                        },
+                    ],
+                    self_closing: false,
+                }),
+                Span(0, 18)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new(r#"<tag attr1="value1"  attr2 =       "value2" >"#).tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![
-                    TagAttr {
-                        name: "attr1",
-                        value: Some("value1"),
-                    },
-                    TagAttr {
-                        name: "attr2",
-                        value: Some("value2"),
-                    },
-                ],
-                self_closing: false,
-            }),]
-        );
-
-        assert_eq!(
-            // text + tag + text
-            Tokenizer::new(r#"before<tag attr1="value1"  attr2 =       "value2" >after"#)
-                .tokenize(),
-            vec![
-                Token::Text("before"),
+            vec![with_span(
                 Token::OpenTag(OpenTag {
                     name: "tag",
                     tag_attrs: vec![
@@ -827,7 +853,34 @@ mod tests {
                     ],
                     self_closing: false,
                 }),
-                Token::Text("after"),
+                Span(0, 44)
+            )]
+        );
+
+        assert_eq!(
+            // text + tag + text
+            Tokenizer::new(r#"before<tag attr1="value1"  attr2 =       "value2" >after"#)
+                .tokenize(),
+            vec![
+                with_span(Token::Text("before"), Span(0, 5)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "tag",
+                        tag_attrs: vec![
+                            TagAttr {
+                                name: "attr1",
+                                value: Some("value1"),
+                            },
+                            TagAttr {
+                                name: "attr2",
+                                value: Some("value2"),
+                            },
+                        ],
+                        self_closing: false,
+                    }),
+                    Span(6, 50)
+                ),
+                with_span(Token::Text("after"), Span(51, 55))
             ]
         );
     }
@@ -836,28 +889,34 @@ mod tests {
     fn test_invalid_tag() {
         assert_eq!(
             Tokenizer::new("< tag>").tokenize(),
-            vec![Token::Text("< tag>")]
+            vec![with_span(Token::Text("< tag>"), Span(0, 5))]
         );
 
-        assert_eq!(Tokenizer::new("<+>").tokenize(), vec![Token::Text("<+>")]);
+        assert_eq!(
+            Tokenizer::new("<+>").tokenize(),
+            vec![with_span(Token::Text("<+>"), Span(0, 2))]
+        );
 
-        assert_eq!(Tokenizer::new("<3a>").tokenize(), vec![Token::Text("<3a>")]);
+        assert_eq!(
+            Tokenizer::new("<3a>").tokenize(),
+            vec![with_span(Token::Text("<3a>"), Span(0, 3))]
+        );
 
         assert_eq!(
             Tokenizer::new("<a~b>").tokenize(),
-            vec![Token::Text("<a~b>")]
+            vec![with_span(Token::Text("<a~b>"), Span(0, 4))]
         );
 
         assert_eq!(
             // text + invalid tag
             Tokenizer::new("text< tag>").tokenize(),
-            vec![Token::Text("text< tag>")]
+            vec![with_span(Token::Text("text< tag>"), Span(0, 9))]
         );
 
         assert_eq!(
             // invalid tag + text
             Tokenizer::new("< tag>text").tokenize(),
-            vec![Token::Text("< tag>text")]
+            vec![with_span(Token::Text("< tag>text"), Span(0, 9))]
         );
     }
 
@@ -865,21 +924,21 @@ mod tests {
     fn test_close_tag() {
         assert_eq!(
             Tokenizer::new("</tag>").tokenize(),
-            vec![Token::CloseTag("tag")]
+            vec![with_span(Token::CloseTag("tag"), Span(0, 5))]
         );
 
         assert_eq!(
             Tokenizer::new("</tag       >").tokenize(),
-            vec![Token::CloseTag("tag")]
+            vec![with_span(Token::CloseTag("tag"), Span(0, 12))]
         );
 
         assert_eq!(
             // text + close tag + text
             Tokenizer::new("before </tag       > after").tokenize(),
             vec![
-                Token::Text("before "),
-                Token::CloseTag("tag"),
-                Token::Text(" after"),
+                with_span(Token::Text("before "), Span(0, 6)),
+                with_span(Token::CloseTag("tag"), Span(7, 19)),
+                with_span(Token::Text(" after"), Span(20, 25)),
             ]
         );
     }
@@ -888,24 +947,24 @@ mod tests {
     fn test_invalid_close_tag() {
         assert_eq!(
             Tokenizer::new("< /tag>").tokenize(),
-            vec![Token::Text("< /tag>")]
+            vec![with_span(Token::Text("< /tag>"), Span(0, 6))]
         );
 
         assert_eq!(
             Tokenizer::new("</ tag>").tokenize(),
-            vec![Token::Text("</ tag>")]
+            vec![with_span(Token::Text("</ tag>"), Span(0, 6))]
         );
 
         assert_eq!(
             // text + invalid close tag
             Tokenizer::new("text</ tag>").tokenize(),
-            vec![Token::Text("text</ tag>")]
+            vec![with_span(Token::Text("text</ tag>"), Span(0, 10))]
         );
 
         assert_eq!(
             // invalid close tag + text
             Tokenizer::new("</ tag>text").tokenize(),
-            vec![Token::Text("</ tag>text")]
+            vec![with_span(Token::Text("</ tag>text"), Span(0, 10))]
         );
     }
 
@@ -913,22 +972,22 @@ mod tests {
     fn test_doctype_tag() {
         assert_eq!(
             Tokenizer::new("<!doctype>").tokenize(),
-            vec![Token::DocTypeTag]
+            vec![with_span(Token::DocTypeTag, Span(0, 9))]
         );
 
         assert_eq!(
             // case insensitive
             Tokenizer::new("<!doctyPe>").tokenize(),
-            vec![Token::DocTypeTag]
+            vec![with_span(Token::DocTypeTag, Span(0, 9))]
         );
 
         assert_eq!(
             // text + doctype + text
             Tokenizer::new("before<!doctype>after").tokenize(),
             vec![
-                Token::Text("before"),
-                Token::DocTypeTag,
-                Token::Text("after"),
+                with_span(Token::Text("before"), Span(0, 5)),
+                with_span(Token::DocTypeTag, Span(6, 15)),
+                with_span(Token::Text("after"), Span(16, 20)),
             ]
         );
     }
@@ -937,24 +996,24 @@ mod tests {
     fn test_invalid_doctype_tag() {
         assert_eq!(
             Tokenizer::new("< !doctype>").tokenize(),
-            vec![Token::Text("< !doctype>")]
+            vec![with_span(Token::Text("< !doctype>"), Span(0, 10))]
         );
 
         assert_eq!(
             Tokenizer::new("<! doctype>").tokenize(),
-            vec![Token::Text("<! doctype>")]
+            vec![with_span(Token::Text("<! doctype>"), Span(0, 10))]
         );
 
         assert_eq!(
             // text + invalid doctype
             Tokenizer::new("text<! doctype>").tokenize(),
-            vec![Token::Text("text<! doctype>")]
+            vec![with_span(Token::Text("text<! doctype>"), Span(0, 14))]
         );
 
         assert_eq!(
             // invalid doctype + text
             Tokenizer::new("<! doctype>text").tokenize(),
-            vec![Token::Text("<! doctype>text")]
+            vec![with_span(Token::Text("<! doctype>text"), Span(0, 14))]
         );
     }
 
@@ -962,21 +1021,21 @@ mod tests {
     fn test_comment_tag() {
         assert_eq!(
             Tokenizer::new("<!--コメント-->").tokenize(),
-            vec![Token::Comment("コメント")]
+            vec![with_span(Token::Comment("コメント"), Span(0, 18))]
         );
 
         assert_eq!(
             Tokenizer::new("<!--line1\nline2-->").tokenize(),
-            vec![Token::Comment("line1\nline2")]
+            vec![with_span(Token::Comment("line1\nline2"), Span(0, 17))]
         );
 
         assert_eq!(
             // text + comment + text
             Tokenizer::new("before<!--コメント-->after").tokenize(),
             vec![
-                Token::Text("before"),
-                Token::Comment("コメント"),
-                Token::Text("after"),
+                with_span(Token::Text("before"), Span(0, 5)),
+                with_span(Token::Comment("コメント"), Span(6, 24)),
+                with_span(Token::Text("after"), Span(25, 29)),
             ]
         );
     }
@@ -985,34 +1044,34 @@ mod tests {
     fn test_invalid_comment_tag() {
         assert_eq!(
             Tokenizer::new("< !--コメント-->").tokenize(),
-            vec![Token::Text("< !--コメント-->")]
+            vec![with_span(Token::Text("< !--コメント-->"), Span(0, 19))]
         );
 
         assert_eq!(
             Tokenizer::new("<!--コメント-- >").tokenize(),
-            vec![Token::Text("<!--コメント-- >")]
+            vec![with_span(Token::Text("<!--コメント-- >"), Span(0, 19))]
         );
 
         assert_eq!(
             Tokenizer::new("<!---コメント-->").tokenize(),
-            vec![Token::Text("<!---コメント-->")]
+            vec![with_span(Token::Text("<!---コメント-->"), Span(0, 19))]
         );
 
         assert_eq!(
             Tokenizer::new("<!--コメント--->").tokenize(),
-            vec![Token::Text("<!--コメント--->")]
+            vec![with_span(Token::Text("<!--コメント--->"), Span(0, 19))]
         );
 
         assert_eq!(
             // text + invalid comment
             Tokenizer::new("text<!--コメント--->").tokenize(),
-            vec![Token::Text("text<!--コメント--->")]
+            vec![with_span(Token::Text("text<!--コメント--->"), Span(0, 23))]
         );
 
         assert_eq!(
             // invalid comment + text
             Tokenizer::new("<!--コメント--->text").tokenize(),
-            vec![Token::Text("<!--コメント--->text")]
+            vec![with_span(Token::Text("<!--コメント--->text"), Span(0, 23))]
         );
     }
 
@@ -1020,94 +1079,91 @@ mod tests {
     fn test_self_closing_tag() {
         assert_eq!(
             Tokenizer::new("<tag/>").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![],
+                    self_closing: true,
+                }),
+                Span(0, 5)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag/ >").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![],
+                    self_closing: true,
+                }),
+                Span(0, 6)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag />").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![],
+                    self_closing: true,
+                }),
+                Span(0, 6)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag / >").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![],
+                    self_closing: true,
+                }),
+                Span(0, 7)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag attr />").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![TagAttr {
-                    name: "attr",
-                    value: None,
-                }],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![TagAttr {
+                        name: "attr",
+                        value: None,
+                    }],
+                    self_closing: true,
+                }),
+                Span(0, 11)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new("<tag attr1  attr2 /    >").tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![
-                    TagAttr {
-                        name: "attr1",
-                        value: None,
-                    },
-                    TagAttr {
-                        name: "attr2",
-                        value: None,
-                    },
-                ],
-                self_closing: true,
-            }),]
+            vec![with_span(
+                Token::OpenTag(OpenTag {
+                    name: "tag",
+                    tag_attrs: vec![
+                        TagAttr {
+                            name: "attr1",
+                            value: None,
+                        },
+                        TagAttr {
+                            name: "attr2",
+                            value: None,
+                        },
+                    ],
+                    self_closing: true,
+                }),
+                Span(0, 23)
+            )]
         );
 
         assert_eq!(
             Tokenizer::new(r#"<tag attr1="value1"  attr2 =       "value2" / >"#).tokenize(),
-            vec![Token::OpenTag(OpenTag {
-                name: "tag",
-                tag_attrs: vec![
-                    TagAttr {
-                        name: "attr1",
-                        value: Some("value1"),
-                    },
-                    TagAttr {
-                        name: "attr2",
-                        value: Some("value2"),
-                    },
-                ],
-                self_closing: true,
-            }),]
-        );
-
-        assert_eq!(
-            // text + tag + text
-            Tokenizer::new(r#"before<tag attr1="value1"  attr2 =       "value2"/ >after"#)
-                .tokenize(),
-            vec![
-                Token::Text("before"),
+            vec![with_span(
                 Token::OpenTag(OpenTag {
                     name: "tag",
                     tag_attrs: vec![
@@ -1122,7 +1178,34 @@ mod tests {
                     ],
                     self_closing: true,
                 }),
-                Token::Text("after"),
+                Span(0, 46)
+            )]
+        );
+
+        assert_eq!(
+            // text + tag + text
+            Tokenizer::new(r#"before<tag attr1="value1"  attr2 =       "value2"/ >after"#)
+                .tokenize(),
+            vec![
+                with_span(Token::Text("before"), Span(0, 5)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "tag",
+                        tag_attrs: vec![
+                            TagAttr {
+                                name: "attr1",
+                                value: Some("value1"),
+                            },
+                            TagAttr {
+                                name: "attr2",
+                                value: Some("value2"),
+                            },
+                        ],
+                        self_closing: true,
+                    }),
+                    Span(6, 51)
+                ),
+                with_span(Token::Text("after"), Span(52, 56)),
             ]
         );
     }
@@ -1131,29 +1214,29 @@ mod tests {
     fn test_invalid_self_closing_tag() {
         assert_eq!(
             Tokenizer::new("< tag />").tokenize(),
-            vec![Token::Text("< tag />")]
+            vec![with_span(Token::Text("< tag />"), Span(0, 7))]
         );
 
         assert_eq!(
             Tokenizer::new("<+ />").tokenize(),
-            vec![Token::Text("<+ />")]
+            vec![with_span(Token::Text("<+ />"), Span(0, 4))]
         );
 
         assert_eq!(
             Tokenizer::new("<3a       / >").tokenize(),
-            vec![Token::Text("<3a       / >")]
+            vec![with_span(Token::Text("<3a       / >"), Span(0, 12))]
         );
 
         assert_eq!(
             // text + invalid tag
             Tokenizer::new("text< tag      />").tokenize(),
-            vec![Token::Text("text< tag      />")]
+            vec![with_span(Token::Text("text< tag      />"), Span(0, 16))]
         );
 
         assert_eq!(
             // invalid tag + text
             Tokenizer::new("< tag />text").tokenize(),
-            vec![Token::Text("< tag />text")]
+            vec![with_span(Token::Text("< tag />text"), Span(0, 11))]
         );
     }
 
@@ -1168,7 +1251,7 @@ mod tests {
 <body>
 <p>this is p tag</p>
 <!--
-comment start 
+comment start
 <div attr1 attr2="value2">this div in a comment</div>
 -->
 <img src="test" />
@@ -1178,77 +1261,101 @@ comment start
         "#
         .trim();
 
-        fn new_line_text() -> Token<'static> {
-            Token::Text("\n")
+        fn new_line_text(start: usize, end: usize) -> WithSpan<Token<'static>> {
+            with_span(Token::Text("\n"), Span(start, end))
         }
 
         let mut tk = Tokenizer::new(html);
         let actual = tk.tokenize();
         let expected = vec![
-            Token::DocTypeTag,
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "html",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "head",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "title",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),
-            Token::Text("test html"),
-            Token::CloseTag("title"),
-            new_line_text(),
-            Token::CloseTag("head"),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "body",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "p",
-                tag_attrs: vec![],
-                self_closing: false,
-            }),
-            Token::Text("this is p tag"),
-            Token::CloseTag("p"),
-            new_line_text(),
-            Token::Comment(
-                "\ncomment start \n<div attr1 attr2=\"value2\">this div in a comment</div>\n",
+            with_span(Token::DocTypeTag, Span(0, 14)),
+            new_line_text(15, 15),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "html",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(16, 21),
             ),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "img",
-                tag_attrs: vec![TagAttr {
-                    name: "src",
-                    value: Some("test"),
-                }],
-                self_closing: true,
-            }),
-            new_line_text(),
-            Token::OpenTag(OpenTag {
-                name: "custom",
-                tag_attrs: vec![TagAttr {
-                    name: "attr1",
-                    value: None,
-                }],
-                self_closing: false,
-            }),
-            Token::CloseTag("custom"),
-            new_line_text(),
-            Token::CloseTag("body"),
-            new_line_text(),
-            Token::CloseTag("html"),
+            new_line_text(22, 22),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "head",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(23, 28),
+            ),
+            new_line_text(29, 29),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "title",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(30, 36),
+            ),
+            with_span(Token::Text("test html"), Span(37, 45)),
+            with_span(Token::CloseTag("title"), Span(46, 53)),
+            new_line_text(54, 54),
+            with_span(Token::CloseTag("head"), Span(55, 61)),
+            new_line_text(62, 62),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "body",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(63, 68),
+            ),
+            new_line_text(69, 69),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "p",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(70, 72),
+            ),
+            with_span(Token::Text("this is p tag"), Span(73, 85)),
+            with_span(Token::CloseTag("p"), Span(86, 89)),
+            new_line_text(90, 90),
+            with_span(
+                Token::Comment(
+                    "\ncomment start\n<div attr1 attr2=\"value2\">this div in a comment</div>\n",
+                ),
+                Span(91, 166),
+            ),
+            new_line_text(167, 167),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "img",
+                    tag_attrs: vec![TagAttr {
+                        name: "src",
+                        value: Some("test"),
+                    }],
+                    self_closing: true,
+                }),
+                Span(168, 185),
+            ),
+            new_line_text(186, 186),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "custom",
+                    tag_attrs: vec![TagAttr {
+                        name: "attr1",
+                        value: None,
+                    }],
+                    self_closing: false,
+                }),
+                Span(187, 200),
+            ),
+            with_span(Token::CloseTag("custom"), Span(201, 209)),
+            new_line_text(210, 210),
+            with_span(Token::CloseTag("body"), Span(211, 217)),
+            new_line_text(218, 218),
+            with_span(Token::CloseTag("html"), Span(219, 225)),
         ];
 
         assert_eq!(actual, expected);
