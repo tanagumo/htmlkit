@@ -211,53 +211,10 @@ pub enum Token<'a> {
     DocTypeTag,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Loc {
-    row: usize,
-    col: usize,
-}
-
-impl Loc {
-    fn advance(&mut self) {
-        self.col += 1;
-    }
-
-    fn break_line(&mut self) {
-        self.row += 1;
-        self.col = 0;
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct WithLoc<T> {
-    value: T,
-    loc: Loc,
-}
-
-impl<T> WithLoc<T> {
-    #[allow(dead_code)]
-    fn new(value: T, loc: Loc) -> Self {
-        Self { value, loc }
-    }
-}
-
-impl<T: Display> Display for WithLoc<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}. (row: {}, col: {})",
-            self.value, self.loc.row, self.loc.col
-        )
-    }
-}
-
-impl<T: StdError + Send + Sync + 'static> StdError for WithLoc<T> {}
-
 #[derive(Debug)]
 struct Input<'a> {
     src: &'a str,
     peekable: Peekable<Chars<'a>>,
-    loc: Loc,
     pos: usize,
 }
 
@@ -267,7 +224,6 @@ impl<'a> Input<'a> {
         Self {
             src,
             peekable: chars.peekable(),
-            loc: Loc::default(),
             pos: 0,
         }
     }
@@ -275,11 +231,6 @@ impl<'a> Input<'a> {
     fn advance(&mut self) -> bool {
         match self.peekable.next() {
             Some(v) => {
-                if v == '\n' {
-                    self.loc.break_line();
-                } else {
-                    self.loc.advance();
-                }
                 self.pos += v.len_utf8();
                 true
             }
@@ -750,27 +701,22 @@ mod tests {
     fn test_input() {
         let mut input = Input::new("tあ\nz");
         input.advance();
-        assert_eq!(input.loc, Loc { row: 0, col: 1 });
         assert_eq!(input.pos, 1);
         assert_eq!(input.remaining(), "あ\nz");
 
         input.advance();
-        assert_eq!(input.loc, Loc { row: 0, col: 2 });
         assert_eq!(input.pos, 4);
         assert_eq!(input.remaining(), "\nz");
 
         input.advance();
-        assert_eq!(input.loc, Loc { row: 1, col: 0 });
         assert_eq!(input.pos, 5);
         assert_eq!(input.remaining(), "z");
 
         input.advance();
-        assert_eq!(input.loc, Loc { row: 1, col: 1 });
         assert_eq!(input.pos, 6);
         assert_eq!(input.remaining(), "");
 
         input.advance();
-        assert_eq!(input.loc, Loc { row: 1, col: 1 });
         assert_eq!(input.pos, 6);
         assert_eq!(input.remaining(), "");
     }
