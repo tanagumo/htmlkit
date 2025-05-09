@@ -415,14 +415,18 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_after_comment(&mut self, ch: char) {
-        if ch == '>' {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '>' {
             self.state = TokenizerState::Text;
         }
         self.advance();
     }
 
     fn handle_after_end_tag_name(&mut self, ch: char) {
-        if ch == '>' {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '>' {
             let tag_name = self.input.read_str(self.tag_name_span);
             self.finalize_close_tag(tag_name);
             self.state = TokenizerState::Text;
@@ -434,6 +438,9 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_after_tag_attr(&mut self, ch: char) {
         match ch {
+            '<' => {
+                self.prepare_for_tag_open();
+            }
             '>' => {
                 self.finalize_open_tag(false);
                 self.state = TokenizerState::Text;
@@ -456,6 +463,9 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_after_tag_value(&mut self, ch: char) {
         match ch {
+            '<' => {
+                self.prepare_for_tag_open();
+            }
             '>' => {
                 self.finalize_open_tag(false);
                 self.state = TokenizerState::Text;
@@ -476,6 +486,9 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_before_tag_attr(&mut self, ch: char) {
         match ch {
+            '<' => {
+                self.prepare_for_tag_open();
+            }
             '>' => {
                 self.finalize_open_tag(false);
                 self.state = TokenizerState::Text;
@@ -495,6 +508,9 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_before_tag_value(&mut self, ch: char) {
         match ch {
+            '<' => {
+                self.prepare_for_tag_open();
+            }
             '"' => {}
             ch => {
                 if !ch.is_whitespace() {
@@ -527,15 +543,19 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_doc_type(&mut self, ch: char) {
-        if ch == '>' {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '>' {
             self.finalize_doctype();
             self.state = TokenizerState::Text;
         }
         self.advance();
     }
 
-    fn handle_before_doc_type_or_comment(&mut self, _ch: char) {
-        if self.input.starts_with("-") {
+    fn handle_before_doc_type_or_comment(&mut self, ch: char) {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if self.input.starts_with("-") {
             if !self.input.starts_with("--") {
                 self.state = TokenizerState::Text;
                 self.advance();
@@ -559,14 +579,21 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn handle_end_tag_open(&mut self, _ch: char) {
-        self.state = TokenizerState::TagName;
-        self.tag_name_span.set(self.input.pos);
+    fn handle_end_tag_open(&mut self, ch: char) {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else {
+            self.state = TokenizerState::TagName;
+            self.tag_name_span.set(self.input.pos);
+        }
         self.advance();
     }
 
     fn handle_self_closing_tag_slash(&mut self, ch: char) {
         match ch {
+            '<' => {
+                self.prepare_for_tag_open();
+            }
             '>' => {
                 self.finalize_open_tag(true);
                 self.state = TokenizerState::Text;
@@ -582,7 +609,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_attr(&mut self, ch: char) {
-        if ch == '>' || ch == '=' || ch.is_whitespace() {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '>' || ch == '=' || ch.is_whitespace() {
             self.tag_attr_name_span.set(self.input.pos);
             let tag_attr_name = self.input.read_str(self.tag_attr_name_span);
 
@@ -615,7 +644,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_name(&mut self, ch: char) {
-        if ch == '>' || ch == '/' || ch.is_whitespace() {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '>' || ch == '/' || ch.is_whitespace() {
             self.tag_name_span.set(self.input.pos);
             let token_finalized = ch == '>';
             let name_start_pos = self.tag_start_pos + if self.is_end_tag { 2 } else { 1 };
@@ -658,7 +689,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_open(&mut self, ch: char) {
-        if ch == '!' {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '!' {
             self.state = TokenizerState::DocTypeOrComment;
         } else {
             if ch == '/' {
@@ -675,7 +708,9 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_value(&mut self, ch: char) {
-        if ch == '"' {
+        if ch == '<' {
+            self.prepare_for_tag_open();
+        } else if ch == '"' {
             self.tag_value_span.set(self.input.pos);
             let tag_value = self.input.read_str(self.tag_value_span);
             self.tag_value_span = GrowingSpan::default();
