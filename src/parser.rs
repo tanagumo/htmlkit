@@ -965,6 +965,22 @@ mod tests {
             Tokenizer::new("< tag>text").tokenize(),
             vec![with_span(Token::Text("< tag>text"), Span(0, 9))]
         );
+
+        assert_eq!(
+            Tokenizer::new("123< tag><validtag>text").tokenize(),
+            vec![
+                with_span(Token::Text("123< tag>"), Span(0, 8)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "validtag",
+                        tag_attrs: vec![],
+                        self_closing: false,
+                    }),
+                    Span(9, 18)
+                ),
+                with_span(Token::Text("text"), Span(19, 22)),
+            ]
+        )
     }
 
     #[test]
@@ -1013,6 +1029,15 @@ mod tests {
             Tokenizer::new("</ tag>text").tokenize(),
             vec![with_span(Token::Text("</ tag>text"), Span(0, 10))]
         );
+
+        assert_eq!(
+            Tokenizer::new("123</ tag></validtag>text").tokenize(),
+            vec![
+                with_span(Token::Text("123</ tag>"), Span(0, 9)),
+                with_span(Token::CloseTag("validtag"), Span(10, 20)),
+                with_span(Token::Text("text"), Span(21, 24)),
+            ]
+        )
     }
 
     #[test]
@@ -1062,6 +1087,22 @@ mod tests {
             Tokenizer::new("<! doctype>text").tokenize(),
             vec![with_span(Token::Text("<! doctype>text"), Span(0, 14))]
         );
+
+        assert_eq!(
+            Tokenizer::new("<! doct<abc>ype>text").tokenize(),
+            vec![
+                with_span(Token::Text("<! doct"), Span(0, 6)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "abc",
+                        tag_attrs: vec![],
+                        self_closing: false,
+                    }),
+                    Span(7, 11)
+                ),
+                with_span(Token::Text("ype>text"), Span(12, 19)),
+            ]
+        );
     }
 
     #[test]
@@ -1074,6 +1115,12 @@ mod tests {
         assert_eq!(
             Tokenizer::new("<!--line1\nline2-->").tokenize(),
             vec![with_span(Token::Comment("line1\nline2"), Span(0, 17))]
+        );
+
+        assert_eq!(
+            // '<' in the comment is treated as normal character
+            Tokenizer::new("<!--<line1\nline2<-->").tokenize(),
+            vec![with_span(Token::Comment("<line1\nline2<"), Span(0, 19))]
         );
 
         assert_eq!(
@@ -1255,6 +1302,33 @@ mod tests {
                 with_span(Token::Text("after"), Span(52, 56)),
             ]
         );
+
+        assert_eq!(
+            // text + tag + text
+            Tokenizer::new(r#"before<tag attr1="value1"  attr2 =       "value2"/ >after"#)
+                .tokenize(),
+            vec![
+                with_span(Token::Text("before"), Span(0, 5)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "tag",
+                        tag_attrs: vec![
+                            TagAttr {
+                                name: "attr1",
+                                value: Some("value1"),
+                            },
+                            TagAttr {
+                                name: "attr2",
+                                value: Some("value2"),
+                            },
+                        ],
+                        self_closing: true,
+                    }),
+                    Span(6, 51)
+                ),
+                with_span(Token::Text("after"), Span(52, 56)),
+            ]
+        );
     }
 
     #[test]
@@ -1285,6 +1359,22 @@ mod tests {
             Tokenizer::new("< tag />text").tokenize(),
             vec![with_span(Token::Text("< tag />text"), Span(0, 11))]
         );
+
+        assert_eq!(
+            Tokenizer::new("123< tag ><validtag />text").tokenize(),
+            vec![
+                with_span(Token::Text("123< tag >"), Span(0, 9)),
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "validtag",
+                        tag_attrs: vec![],
+                        self_closing: true,
+                    }),
+                    Span(10, 21)
+                ),
+                with_span(Token::Text("text"), Span(22, 25)),
+            ]
+        )
     }
 
     #[test]
