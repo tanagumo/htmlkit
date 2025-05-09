@@ -703,9 +703,7 @@ impl<'a> Tokenizer<'a> {
 
     fn handle_text(&mut self, ch: char) {
         if ch == '<' {
-            self.tag_start_pos = self.input.pos;
-            self.state = TokenizerState::TagOpen;
-            self.tag_name_span = Default::default();
+            self.prepare_for_tag_open();
         }
         self.advance();
     }
@@ -759,6 +757,12 @@ impl<'a> Tokenizer<'a> {
         } else {
             0
         }
+    }
+
+    fn prepare_for_tag_open(&mut self) {
+        self.tag_start_pos = self.input.pos;
+        self.state = TokenizerState::TagOpen;
+        self.tag_name_span = Default::default();
     }
 }
 
