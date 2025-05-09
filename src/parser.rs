@@ -705,6 +705,7 @@ impl<'a> Tokenizer<'a> {
         if ch == '<' {
             self.tag_start_pos = self.input.pos;
             self.state = TokenizerState::TagOpen;
+            self.tag_name_span = Default::default();
         }
         self.advance();
     }
