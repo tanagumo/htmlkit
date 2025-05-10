@@ -186,23 +186,23 @@ impl<'a> Display for OpenTag<'a> {
 
 #[derive(Debug)]
 struct OpenTagBuilder<'a> {
-    name_span: Option<Span>,
+    name: Option<&'a str>,
     tag_attrs: Vec<TagAttr<'a>>,
 }
 
 impl<'a> OpenTagBuilder<'a> {
     fn new() -> Self {
         Self {
-            name_span: None,
+            name: None,
             tag_attrs: Vec::with_capacity(128),
         }
     }
 
-    fn set_name_span(&mut self, name_span: impl Into<Span>) {
-        if self.name_span.is_some() {
+    fn set_name(&mut self, name: &'a str) {
+        if self.name.is_some() {
             panic!("`name_span` is already set");
         }
-        self.name_span = Some(name_span.into());
+        self.name = Some(name);
     }
 
     fn add_attr_name(&mut self, name: &'a str) {
@@ -225,10 +225,9 @@ impl<'a> OpenTagBuilder<'a> {
         }
     }
 
-    fn build(&mut self, input: &Input<'a>, self_closing: bool) -> OpenTag<'a> {
-        let ns = self.name_span.take().unwrap();
+    fn build(&mut self, self_closing: bool) -> OpenTag<'a> {
         OpenTag {
-            name: &input.src[ns.0..ns.1],
+            name: self.name.take().unwrap(),
             tag_attrs: mem::take(&mut self.tag_attrs),
             self_closing,
         }
@@ -661,11 +660,17 @@ impl<'a> Tokenizer<'a> {
                     self.finalize_close_tag(tag_name);
                 }
                 (false, true) => {
-                    self.open_tag_builder.set_name_span(self.tag_name_span);
+                    let name = self
+                        .input
+                        .read_str(Range::<usize>::from(self.tag_name_span));
+                    self.open_tag_builder.set_name(name);
                     self.finalize_open_tag(false);
                 }
                 (false, false) => {
-                    self.open_tag_builder.set_name_span(self.tag_name_span);
+                    let name = self
+                        .input
+                        .read_str(Range::<usize>::from(self.tag_name_span));
+                    self.open_tag_builder.set_name(name);
                 }
                 (true, false) => {}
             }
@@ -761,7 +766,7 @@ impl<'a> Tokenizer<'a> {
     fn finalize_open_tag(&mut self, self_closing: bool) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        let token = self.open_tag_builder.build(&self.input, self_closing);
+        let token = self.open_tag_builder.build(self_closing);
         let tag_name = token.name;
         self.push_token(
             Token::OpenTag(token),
@@ -1647,13 +1652,6 @@ console.log("</script>");
             new_line_text(343, 343),
             with_span(Token::CloseTag("html"), Span(344, 350)),
         ];
-
-        for (a, b) in actual.iter().zip(expected.iter()) {
-            if a != b {
-                println!("{:?}, {:?}", a, b);
-                break;
-            }
-        }
 
         assert_tokens(actual, &expected);
     }
