@@ -232,6 +232,11 @@ impl<'a> OpenTagBuilder<'a> {
             self_closing,
         }
     }
+
+    fn clear(&mut self) {
+        self.name = None;
+        self.tag_attrs.clear();
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -644,9 +649,10 @@ impl<'a> Tokenizer<'a> {
         } else if ch == '>' || ch == '/' || ch.is_whitespace() {
             self.tag_name_span.set(self.input.pos);
             let token_finalized = ch == '>';
-            let name_start_pos = self.tag_start_pos + if self.is_end_tag { 2 } else { 1 };
 
-            let tag_name = self.input.read_str(name_start_pos..self.input.pos);
+            let tag_name = self
+                .input
+                .read_str(Range::<usize>::from(self.tag_name_span));
             if !TAG_NAME_RE
                 .get_or_init(|| Regex::new(TAG_NAME_RE_STR).unwrap())
                 .is_match(tag_name)
@@ -655,24 +661,15 @@ impl<'a> Tokenizer<'a> {
                 return;
             }
 
+            self.open_tag_builder.set_name(tag_name);
             match (self.is_end_tag, token_finalized) {
                 (true, true) => {
                     self.finalize_close_tag(tag_name);
                 }
                 (false, true) => {
-                    let name = self
-                        .input
-                        .read_str(Range::<usize>::from(self.tag_name_span));
-                    self.open_tag_builder.set_name(name);
                     self.finalize_open_tag(false);
                 }
-                (false, false) => {
-                    let name = self
-                        .input
-                        .read_str(Range::<usize>::from(self.tag_name_span));
-                    self.open_tag_builder.set_name(name);
-                }
-                (true, false) => {}
+                (_, false) => {}
             }
 
             self.state = if token_finalized {
@@ -819,6 +816,7 @@ impl<'a> Tokenizer<'a> {
         self.tag_start_pos = self.input.pos;
         self.state = TokenizerState::TagOpen;
         self.tag_name_span = Default::default();
+        self.open_tag_builder.clear();
     }
 
     fn is_raw_text_tag(&self, name: &str) -> bool {
