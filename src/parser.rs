@@ -362,9 +362,12 @@ pub struct Tokenizer<'a> {
     tokens: Vec<WithSpan<Token<'a>>>,
     open_tag_builder: OpenTagBuilder<'a>,
     tag_start_pos: usize,
+    raw_text_tag_name: Option<&'a str>,
 }
 
 impl<'a> Tokenizer<'a> {
+    const RAW_TEXT_TAG_NAMES: [&'static str; 2] = ["script", "style"];
+
     pub fn new(src: &'a str) -> Self {
         let _ = TAG_NAME_RE.get_or_init(|| Regex::new(TAG_NAME_RE_STR).unwrap());
         let _ = TAG_ATTR_RE.get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap());
@@ -381,6 +384,7 @@ impl<'a> Tokenizer<'a> {
             tokens: vec![],
             open_tag_builder: OpenTagBuilder::new(),
             tag_start_pos: 0,
+            raw_text_tag_name: None,
         }
     }
 
@@ -689,19 +693,38 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn handle_tag_open(&mut self, ch: char) {
-        if ch == '<' {
-            self.prepare_for_tag_open();
-        } else if ch == '!' {
-            self.state = TokenizerState::DocTypeOrComment;
+        if ch != '/' && self.raw_text_tag_name.is_some() {
+            self.state = TokenizerState::Text;
         } else {
-            if ch == '/' {
-                self.state = TokenizerState::EndTagOpen;
-                self.is_end_tag = true;
-                self.tag_name_span.set(self.input.pos + 1);
-            } else {
-                self.state = TokenizerState::TagName;
-                self.is_end_tag = false;
-                self.tag_name_span.set(self.input.pos);
+            match ch {
+                '<' => {
+                    self.prepare_for_tag_open();
+                }
+                '!' => {
+                    self.state = TokenizerState::DocTypeOrComment;
+                }
+                '/' => {
+                    let mut transit_to_end_tag_open = || {
+                        self.state = TokenizerState::EndTagOpen;
+                        self.is_end_tag = true;
+                        self.tag_name_span.set(self.input.pos + 1);
+                    };
+
+                    if let Some(raw_text_tag) = self.raw_text_tag_name {
+                        if !self.input.remaining()[1..].starts_with(raw_text_tag) {
+                            self.state = TokenizerState::Text;
+                        } else {
+                            transit_to_end_tag_open();
+                        }
+                    } else {
+                        transit_to_end_tag_open();
+                    }
+                }
+                _ => {
+                    self.state = TokenizerState::TagName;
+                    self.is_end_tag = false;
+                    self.tag_name_span.set(self.input.pos);
+                }
             }
         }
         self.input.advance();
@@ -746,8 +769,16 @@ impl<'a> Tokenizer<'a> {
     fn finalize_open_tag(&mut self, self_closing: bool) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
-        let token = Token::OpenTag(self.open_tag_builder.build(&self.input, self_closing));
-        self.push_token(token, Span(self.next_start_pos(), self.input.pos));
+        let token = self.open_tag_builder.build(&self.input, self_closing);
+        let tag_name = token.name;
+        self.push_token(
+            Token::OpenTag(token),
+            Span(self.next_start_pos(), self.input.pos),
+        );
+        if self.is_raw_text_tag(tag_name) {
+            self.raw_text_tag_name = Some(tag_name);
+        }
+
         self.tag_name_span = GrowingSpan::default();
     }
 
@@ -757,6 +788,7 @@ impl<'a> Tokenizer<'a> {
         let span = Span(self.next_start_pos(), self.input.pos);
         self.push_token(Token::CloseTag(tag_name), span);
         self.tag_name_span = GrowingSpan::default();
+        self.raw_text_tag_name = None;
     }
 
     fn finalize_doctype(&mut self) {
@@ -790,6 +822,10 @@ impl<'a> Tokenizer<'a> {
         self.tag_start_pos = self.input.pos;
         self.state = TokenizerState::TagOpen;
         self.tag_name_span = Default::default();
+    }
+
+    fn is_raw_text_tag(&self, name: &str) -> bool {
+        Self::RAW_TEXT_TAG_NAMES.iter().any(|n| *n == name)
     }
 }
 
@@ -1383,12 +1419,99 @@ mod tests {
     }
 
     #[test]
+    fn script_tag_ignores_non_matching_close_tag() {
+        assert_tokens(
+            Tokenizer::new(r#"<script type="text/javascript">console.log("</scrip>")</script>"#)
+                .tokenize(),
+            &vec![
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "script",
+                        tag_attrs: vec![TagAttr {
+                            name: "type",
+                            value: Some("text/javascript"),
+                        }],
+                        self_closing: false,
+                    }),
+                    Span(0, 30),
+                ),
+                with_span(Token::Text(r#"console.log("</scrip>")"#), Span(31, 53)),
+                with_span(Token::CloseTag("script"), Span(54, 62)),
+            ],
+        );
+
+        assert_tokens(
+            Tokenizer::new(r#"<script type="text/javascript">console.log("</script>")</script>"#)
+                .tokenize(),
+            &vec![
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "script",
+                        tag_attrs: vec![TagAttr {
+                            name: "type",
+                            value: Some("text/javascript"),
+                        }],
+                        self_closing: false,
+                    }),
+                    Span(0, 30),
+                ),
+                with_span(Token::Text(r#"console.log(""#), Span(31, 43)),
+                with_span(Token::CloseTag("script"), Span(44, 52)),
+                with_span(Token::Text(r#"")"#), Span(53, 54)),
+                with_span(Token::CloseTag("script"), Span(55, 63)),
+            ],
+        );
+    }
+
+    #[test]
+    fn style_tag_ignores_non_matching_close_tag() {
+        assert_tokens(
+            Tokenizer::new(r#"<style>console.log("</styl>")</style>"#).tokenize(),
+            &vec![
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "style",
+                        tag_attrs: vec![],
+                        self_closing: false,
+                    }),
+                    Span(0, 6),
+                ),
+                with_span(Token::Text(r#"console.log("</styl>")"#), Span(7, 28)),
+                with_span(Token::CloseTag("style"), Span(29, 36)),
+            ],
+        );
+
+        assert_tokens(
+            Tokenizer::new(r#"<style>console.log("</style>")</style>"#).tokenize(),
+            &vec![
+                with_span(
+                    Token::OpenTag(OpenTag {
+                        name: "style",
+                        tag_attrs: vec![],
+                        self_closing: false,
+                    }),
+                    Span(0, 6),
+                ),
+                with_span(Token::Text(r#"console.log(""#), Span(7, 19)),
+                with_span(Token::CloseTag("style"), Span(20, 27)),
+                with_span(Token::Text(r#"")"#), Span(28, 29)),
+                with_span(Token::CloseTag("style"), Span(30, 37)),
+            ],
+        );
+    }
+
+    #[test]
     fn test_html() {
         let html = r#"
 <!doctype html>
 <html>
 <head>
 <title>test html</title>
+<style>
+    div#main {
+        color: red
+    }
+</style>
 </head>
 <body>
 <p>this is p tag</p>
@@ -1398,6 +1521,9 @@ comment start
 -->
 <img src="test" />
 <custom attr1></custom>
+<script type="text/javascript">
+console.log("</script>");
+</script>
 </body>
 </html>
         "#
@@ -1441,35 +1567,49 @@ comment start
             with_span(Token::Text("test html"), Span(37, 45)),
             with_span(Token::CloseTag("title"), Span(46, 53)),
             new_line_text(54, 54),
-            with_span(Token::CloseTag("head"), Span(55, 61)),
-            new_line_text(62, 62),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "style",
+                    tag_attrs: vec![],
+                    self_closing: false,
+                }),
+                Span(55, 61),
+            ),
+            with_span(
+                Token::Text("\n    div#main {\n        color: red\n    }\n"),
+                Span(62, 102),
+            ),
+            with_span(Token::CloseTag("style"), Span(103, 110)),
+            new_line_text(111, 111),
+            with_span(Token::CloseTag("head"), Span(112, 118)),
+            new_line_text(119, 119),
             with_span(
                 Token::OpenTag(OpenTag {
                     name: "body",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Span(63, 68),
+                Span(120, 125),
             ),
-            new_line_text(69, 69),
+            new_line_text(126, 126),
             with_span(
                 Token::OpenTag(OpenTag {
                     name: "p",
                     tag_attrs: vec![],
                     self_closing: false,
                 }),
-                Span(70, 72),
+                Span(127, 129),
             ),
-            with_span(Token::Text("this is p tag"), Span(73, 85)),
-            with_span(Token::CloseTag("p"), Span(86, 89)),
-            new_line_text(90, 90),
+            with_span(Token::Text("this is p tag"), Span(130, 142)),
+            with_span(Token::CloseTag("p"), Span(143, 146)),
+            new_line_text(147, 147),
             with_span(
                 Token::Comment(
                     "\ncomment start\n<div attr1 attr2=\"value2\">this div in a comment</div>\n",
                 ),
-                Span(91, 166),
+                Span(148, 223),
             ),
-            new_line_text(167, 167),
+            new_line_text(224, 224),
             with_span(
                 Token::OpenTag(OpenTag {
                     name: "img",
@@ -1479,9 +1619,9 @@ comment start
                     }],
                     self_closing: true,
                 }),
-                Span(168, 185),
+                Span(225, 242),
             ),
-            new_line_text(186, 186),
+            new_line_text(243, 243),
             with_span(
                 Token::OpenTag(OpenTag {
                     name: "custom",
@@ -1491,14 +1631,37 @@ comment start
                     }],
                     self_closing: false,
                 }),
-                Span(187, 200),
+                Span(244, 257),
             ),
-            with_span(Token::CloseTag("custom"), Span(201, 209)),
-            new_line_text(210, 210),
-            with_span(Token::CloseTag("body"), Span(211, 217)),
-            new_line_text(218, 218),
-            with_span(Token::CloseTag("html"), Span(219, 225)),
+            with_span(Token::CloseTag("custom"), Span(258, 266)),
+            new_line_text(267, 267),
+            with_span(
+                Token::OpenTag(OpenTag {
+                    name: "script",
+                    tag_attrs: vec![TagAttr {
+                        name: "type",
+                        value: Some("text/javascript"),
+                    }],
+                    self_closing: false,
+                }),
+                Span(268, 298),
+            ),
+            with_span(Token::Text("\nconsole.log(\""), Span(299, 312)),
+            with_span(Token::CloseTag("script"), Span(313, 321)),
+            with_span(Token::Text("\");\n"), Span(322, 325)),
+            with_span(Token::CloseTag("script"), Span(326, 334)),
+            new_line_text(335, 335),
+            with_span(Token::CloseTag("body"), Span(336, 342)),
+            new_line_text(343, 343),
+            with_span(Token::CloseTag("html"), Span(344, 350)),
         ];
+
+        for (a, b) in actual.iter().zip(expected.iter()) {
+            if a != b {
+                println!("{:?}, {:?}", a, b);
+                break;
+            }
+        }
 
         assert_tokens(actual, &expected);
     }
