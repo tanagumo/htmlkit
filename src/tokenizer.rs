@@ -5,7 +5,7 @@ use std::{
     fmt::Display,
     iter::Peekable,
     mem,
-    ops::{Range, RangeFrom, RangeFull, RangeTo},
+    ops::{Range, RangeBounds},
     str::Chars,
     sync::OnceLock,
 };
@@ -28,33 +28,6 @@ impl From<(usize, usize)> for Span {
 impl Into<Range<usize>> for Span {
     fn into(self) -> Range<usize> {
         self.0..self.1
-    }
-}
-
-#[derive(Debug)]
-struct RangeWrapper(Option<usize>, Option<usize>);
-
-impl From<Range<usize>> for RangeWrapper {
-    fn from(value: Range<usize>) -> Self {
-        Self(Some(value.start), Some(value.end))
-    }
-}
-
-impl From<RangeFrom<usize>> for RangeWrapper {
-    fn from(value: RangeFrom<usize>) -> Self {
-        Self(Some(value.start), None)
-    }
-}
-
-impl From<RangeTo<usize>> for RangeWrapper {
-    fn from(value: RangeTo<usize>) -> Self {
-        Self(None, Some(value.end))
-    }
-}
-
-impl From<RangeFull> for RangeWrapper {
-    fn from(_: RangeFull) -> Self {
-        Self(None, None)
     }
 }
 
@@ -85,9 +58,17 @@ impl From<GrowingSpan> for Range<usize> {
     }
 }
 
-impl From<GrowingSpan> for RangeWrapper {
-    fn from(value: GrowingSpan) -> Self {
-        Self(Some(value.0.unwrap()), Some(value.1.unwrap()))
+impl RangeBounds<usize> for GrowingSpan {
+    fn start_bound(&self) -> std::ops::Bound<&usize> {
+        use std::ops::Bound::*;
+        let start = self.0.as_ref().unwrap();
+        Included(start)
+    }
+
+    fn end_bound(&self) -> std::ops::Bound<&usize> {
+        use std::ops::Bound::*;
+        let end = self.1.as_ref().unwrap();
+        Excluded(end)
     }
 }
 
@@ -318,14 +299,25 @@ impl<'a> Input<'a> {
         true
     }
 
-    fn read_str(&self, range: impl Into<RangeWrapper>) -> &'a str {
-        let range = range.into();
-        match (range.0, range.1) {
-            (Some(start), Some(end)) => &self.src[start..end],
-            (Some(start), None) => &self.src[start..],
-            (None, Some(end)) => &self.src[..end],
-            (None, None) => &self.src[..],
-        }
+    fn read_str<R>(&self, range: R) -> &'a str
+    where
+        R: RangeBounds<usize>,
+    {
+        use std::ops::Bound::*;
+
+        let start = match range.start_bound() {
+            Included(&s) => s,
+            Excluded(&s) => s + 1,
+            Unbounded => 0,
+        };
+
+        let end = match range.end_bound() {
+            Included(&e) => e + 1,
+            Excluded(&e) => e,
+            Unbounded => self.src.len(),
+        };
+
+        &self.src[start..end]
     }
 }
 
