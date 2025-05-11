@@ -1,0 +1,8 @@
+[package]
+name = "htmlkit_dom"
+version = "0.1.0"
+edition = "2024"
+description = "DOM tree construction layer for the htmlkit project"
+license = "MIT"
+
+[dependencies]

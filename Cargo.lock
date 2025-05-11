@@ -12,7 +12,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "html_parser"
+name = "htmlkit_dom"
+version = "0.1.0"
+
+[[package]]
+name = "htmlkit_query"
+version = "0.1.0"
+
+[[package]]
+name = "htmlkit_tokenizer"
 version = "0.1.0"
 dependencies = [
  "regex",

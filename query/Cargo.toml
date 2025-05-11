@@ -1,0 +1,8 @@
+[package]
+name = "htmlkit_query"
+version = "0.1.0"
+edition = "2024"
+description = "Query and selector engine for the htmlkit project"
+license = "MIT"
+
+[dependencies]
