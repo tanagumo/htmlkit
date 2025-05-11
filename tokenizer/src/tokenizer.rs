@@ -1,10 +1,10 @@
 use regex::Regex;
 use std::{
     error::Error as StdError,
-    fmt::Display,
+    fmt::{Debug, Display},
     iter::Peekable,
     mem,
-    ops::{Range, RangeBounds},
+    ops::{Deref, Range, RangeBounds},
     str::Chars,
     sync::OnceLock,
 };
@@ -330,6 +330,34 @@ enum TokenizerState {
     Text,
 }
 
+pub struct TokenStream<'a>(Vec<WithSpan<Token<'a>>>);
+
+impl<'a> Display for TokenStream<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tokens = self
+            .0
+            .iter()
+            .map(|t| format!("    <{}>", t))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        write!(f, "[\n{}\n]", tokens)
+    }
+}
+
+impl<'a> Debug for TokenStream<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.iter()).finish()
+    }
+}
+
+impl<'a> Deref for TokenStream<'a> {
+    type Target = [WithSpan<Token<'a>>];
+
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
 pub struct Tokenizer<'a> {
     input: Input<'a>,
     state: TokenizerState,
@@ -339,7 +367,7 @@ pub struct Tokenizer<'a> {
     tag_value_span: GrowingSpan,
     text_pos: usize,
     comment_span: GrowingSpan,
-    tokens: Vec<WithSpan<Token<'a>>>,
+    tokens: TokenStream<'a>,
     open_tag_builder: OpenTagBuilder<'a>,
     tag_start_pos: usize,
     raw_text_tag_name: Option<&'a str>,
@@ -361,14 +389,14 @@ impl<'a> Tokenizer<'a> {
             comment_span: GrowingSpan::default(),
             tag_value_span: GrowingSpan::default(),
             text_pos: 0,
-            tokens: vec![],
+            tokens: TokenStream(vec![]),
             open_tag_builder: OpenTagBuilder::new(),
             tag_start_pos: 0,
             raw_text_tag_name: None,
         }
     }
 
-    pub fn tokenize(&mut self) -> &[WithSpan<Token<'a>>] {
+    pub fn tokenize(&mut self) -> &TokenStream<'a> {
         while let Some(ch) = self.input.peek() {
             match self.state {
                 TokenizerState::AfterComment => self.handle_after_comment(ch),
@@ -777,7 +805,7 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn push_token(&mut self, token: Token<'a>, span: impl Into<Span>) {
-        self.tokens.push(WithSpan::new(token, span.into()));
+        self.tokens.0.push(WithSpan::new(token, span.into()));
     }
 
     fn next_start_pos(&self) -> usize {
