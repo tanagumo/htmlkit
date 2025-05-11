@@ -16,14 +16,18 @@ const TAG_ATTR_RE_STR: &'static str = r"^[a-zA-Z_:][a-zA-Z0-9:._-]*$";
 const TAG_NAME_RE: OnceLock<Regex> = OnceLock::new();
 const TAG_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 
+/// Represents a byte span within the original input string.
+/// Used to track source positions of tokens.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct Span(usize, usize);
 
 impl Span {
+    /// Returns the start byte position of the span.
     pub fn start(&self) -> usize {
         self.0
     }
 
+    /// Returns the end byte position of the span.
     pub fn end(&self) -> usize {
         self.1
     }
@@ -103,6 +107,8 @@ impl<'a> Display for TagAttrError<'a> {
 
 impl<'a> StdError for TagAttrError<'a> {}
 
+/// Wraps a value together with its span information.
+/// Used to annotate tokens with their position in the input.
 #[derive(Debug, PartialEq, Eq)]
 pub struct WithSpan<T> {
     value: T,
@@ -110,10 +116,12 @@ pub struct WithSpan<T> {
 }
 
 impl<T> WithSpan<T> {
+    /// Returns a reference to the wrapped value.
     pub fn value(&self) -> &T {
         &self.value
     }
 
+    /// Returns the span associated with the wrapped value.
     pub fn span(&self) -> Span {
         self.span
     }
@@ -138,6 +146,7 @@ where
     }
 }
 
+/// Represents a tag attribute with an optional value.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TagAttr<'a> {
     name: &'a str,
@@ -145,10 +154,12 @@ pub struct TagAttr<'a> {
 }
 
 impl<'a> TagAttr<'a> {
+    /// Returns the attribute name.
     pub fn name(&self) -> &'a str {
         self.name
     }
 
+    /// Returns the attribute value if present.
     pub fn value(&self) -> Option<&'a str> {
         self.value
     }
@@ -164,6 +175,7 @@ impl<'a> Display for TagAttr<'a> {
     }
 }
 
+/// Represents an opening tag, including its name, attributes, and self-closing flag.
 #[derive(Debug, PartialEq, Eq)]
 pub struct OpenTag<'a> {
     name: &'a str,
@@ -172,14 +184,17 @@ pub struct OpenTag<'a> {
 }
 
 impl<'a> OpenTag<'a> {
+    /// Returns the tag name.
     pub fn name(&self) -> &'a str {
         self.name
     }
 
+    /// Returns the list of tag attributes.
     pub fn tag_attrs(&self) -> &[TagAttr<'a>] {
         &self.tag_attrs
     }
 
+    /// Returns true if the tag is self-closing.
     pub fn self_closing(&self) -> bool {
         self.self_closing
     }
@@ -255,12 +270,18 @@ impl<'a> OpenTagBuilder<'a> {
     }
 }
 
+/// Represents a single token in the HTML input stream.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token<'a> {
+    /// An opening tag and its metadata.
     OpenTag(OpenTag<'a>),
+    /// A comment section (`<!-- -->`).
     Comment(&'a str),
+    /// Raw text content between tags.
     Text(&'a str),
+    /// A closing tag (e.g., `</div>`).
     CloseTag(&'a str),
+    /// A document type declaration (`<!DOCTYPE>`).
     DocTypeTag,
 }
 
@@ -430,6 +451,8 @@ pub struct Tokenizer<'a> {
 impl<'a> Tokenizer<'a> {
     const RAW_TEXT_TAG_NAMES: [&'static str; 2] = ["script", "style"];
 
+    /// Create a new tokenizer instance for the given input string.
+    /// This sets up the internal state and prepares for parsing.
     pub fn new(src: &'a str) -> Self {
         let _ = TAG_NAME_RE.get_or_init(|| Regex::new(TAG_NAME_RE_STR).unwrap());
         let _ = TAG_ATTR_RE.get_or_init(|| Regex::new(TAG_ATTR_RE_STR).unwrap());
@@ -449,7 +472,8 @@ impl<'a> Tokenizer<'a> {
             raw_text_tag_name: None,
         }
     }
-
+    /// Run the tokenizer and return the list of tokens.
+    /// This consumes the input and constructs the full token stream.
     pub fn tokenize(&mut self) -> &TokenStream<'a> {
         while let Some(ch) = self.input.peek() {
             match self.state {
@@ -818,6 +842,9 @@ impl<'a> Tokenizer<'a> {
         self.input.advance();
     }
 
+    /// Finalize an open tag and emit it as a token.
+    /// If the tag is of raw text type (e.g., `<script>` or `<style>`), enable raw text mode.
+    /// This resets span tracking and updates the parser state.
     fn finalize_open_tag(&mut self, self_closing: bool) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
@@ -834,6 +861,8 @@ impl<'a> Tokenizer<'a> {
         self.tag_name_span = GrowingSpan::default();
     }
 
+    /// Finalize a close tag (e.g., `</div>`) and emit it as a token.
+    /// This resets span tracking and disables raw text mode.
     fn finalize_close_tag(&mut self, tag_name: &'a str) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
@@ -843,6 +872,7 @@ impl<'a> Tokenizer<'a> {
         self.raw_text_tag_name = None;
     }
 
+    /// Finalize a `<!DOCTYPE>` tag and emit it as a token.
     fn finalize_doctype(&mut self) {
         self.finalize_text_if_exist(self.tag_start_pos);
         self.text_pos = self.input.pos + 1;
@@ -850,6 +880,8 @@ impl<'a> Tokenizer<'a> {
         self.push_token(Token::DocTypeTag, span);
     }
 
+    /// Emit a `Text` token for content between `text_pos` and `end_pos`, if any.
+    /// This is used to flush accumulated character data before a new tag.
     fn finalize_text_if_exist(&mut self, end_pos: usize) {
         let text = self.input.read_str(self.text_pos..end_pos);
         if !text.is_empty() {
@@ -858,10 +890,13 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// Push a token into the internal token list, wrapping it with its span.
     fn push_token(&mut self, token: Token<'a>, span: impl Into<Span>) {
         self.tokens.0.push(WithSpan::new(token, span.into()));
     }
 
+    /// Calculate the start position of the next token.
+    /// This is the byte offset immediately after the last token.
     fn next_start_pos(&self) -> usize {
         if let Some(t) = self.tokens.last() {
             t.span.1 + 1
@@ -870,6 +905,8 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// Prepare internal state to begin parsing a new tag.
+    /// This resets tag spans and the open tag builder.
     fn prepare_for_tag_open(&mut self) {
         self.tag_start_pos = self.input.pos;
         self.state = TokenizerState::TagOpen;
@@ -877,6 +914,8 @@ impl<'a> Tokenizer<'a> {
         self.open_tag_builder.clear();
     }
 
+    /// Determine if a given tag name is considered a raw text element.
+    /// Raw text tags (like `<script>`, `<style>`) disable nested parsing until closed.
     fn is_raw_text_tag(&self, name: &str) -> bool {
         Self::RAW_TEXT_TAG_NAMES.iter().any(|n| *n == name)
     }
