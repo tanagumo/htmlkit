@@ -330,7 +330,6 @@ enum TokenizerState {
     Text,
 }
 
-#[derive(Debug)]
 pub struct Tokenizer<'a> {
     input: Input<'a>,
     state: TokenizerState,
