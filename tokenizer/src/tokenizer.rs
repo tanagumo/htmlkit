@@ -17,7 +17,17 @@ const TAG_NAME_RE: OnceLock<Regex> = OnceLock::new();
 const TAG_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct Span(usize, usize);
+pub struct Span(usize, usize);
+
+impl Span {
+    pub fn start(&self) -> usize {
+        self.0
+    }
+
+    pub fn end(&self) -> usize {
+        self.1
+    }
+}
 
 impl From<(usize, usize)> for Span {
     fn from(value: (usize, usize)) -> Self {
@@ -73,7 +83,7 @@ impl RangeBounds<usize> for GrowingSpan {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TagAttrError<'a> {
+enum TagAttrError<'a> {
     ValueAlreadySet(&'a str),
     AttrNotFound,
 }
@@ -97,6 +107,16 @@ impl<'a> StdError for TagAttrError<'a> {}
 pub struct WithSpan<T> {
     value: T,
     span: Span,
+}
+
+impl<T> WithSpan<T> {
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
 }
 
 impl<T> WithSpan<T> {
@@ -124,6 +144,16 @@ pub struct TagAttr<'a> {
     value: Option<&'a str>,
 }
 
+impl<'a> TagAttr<'a> {
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub fn value(&self) -> Option<&'a str> {
+        self.value
+    }
+}
+
 impl<'a> Display for TagAttr<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(v) = self.value {
@@ -139,6 +169,20 @@ pub struct OpenTag<'a> {
     name: &'a str,
     tag_attrs: Vec<TagAttr<'a>>,
     self_closing: bool,
+}
+
+impl<'a> OpenTag<'a> {
+    pub fn name(&self) -> &'a str {
+        self.name
+    }
+
+    pub fn tag_attrs(&self) -> &[TagAttr<'a>] {
+        &self.tag_attrs
+    }
+
+    pub fn self_closing(&self) -> bool {
+        self.self_closing
+    }
 }
 
 impl<'a> Display for OpenTag<'a> {
