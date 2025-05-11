@@ -151,7 +151,7 @@ impl<'a> Display for OpenTag<'a> {
 
         write!(
             f,
-            "tag(name={}, attrs={}, self_closing={})",
+            "OpenTag(name={}, attrs={}, self_closing={})",
             self.name, tag_attrs, self.self_closing
         )
     }
@@ -217,6 +217,20 @@ pub enum Token<'a> {
     Text(&'a str),
     CloseTag(&'a str),
     DocTypeTag,
+}
+
+impl<'a> Display for Token<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Token::*;
+
+        match self {
+            OpenTag(ot) => write!(f, "{}", ot),
+            Comment(c) => write!(f, "Comment({})", c),
+            Text(t) => write!(f, "Text({})", t),
+            CloseTag(tag_name) => write!(f, "CloseTag(name={})", tag_name),
+            DocTypeTag => write!(f, "DocType"),
+        }
+    }
 }
 
 #[derive(Debug)]
