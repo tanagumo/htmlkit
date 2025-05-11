@@ -1,6 +1,5 @@
 use regex::Regex;
 use std::{
-    borrow::Cow,
     error::Error as StdError,
     fmt::Display,
     iter::Peekable,
@@ -94,32 +93,6 @@ impl<'a> Display for TagAttrError<'a> {
 impl<'a> StdError for TagAttrError<'a> {}
 
 #[derive(Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TokenizeError<'a> {
-    MalformedSelfClosingTag(Cow<'a, str>),
-    MalformedCommentTag,
-    MalformedDocTypeTag,
-    TagAttrError(TagAttrError<'a>),
-}
-
-impl<'a> Display for TokenizeError<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let message = match self {
-            TokenizeError::MalformedSelfClosingTag(reason) => {
-                format!("malformed self closing tag. ({})", reason)
-            }
-            TokenizeError::MalformedCommentTag => format!("malformed comment tag"),
-            TokenizeError::MalformedDocTypeTag => format!("malformed doctype tag"),
-            TokenizeError::TagAttrError(err) => format!("{}", err),
-        };
-
-        write!(f, "tokenize error. ({})", message)
-    }
-}
-
-impl<'a> StdError for TokenizeError<'a> {}
-
-#[derive(Debug, PartialEq, Eq)]
 pub struct WithSpan<T> {
     value: T,
     span: Span,
@@ -210,18 +183,16 @@ impl<'a> OpenTagBuilder<'a> {
         self.tag_attrs.push(attr);
     }
 
-    fn set_attr_value(&mut self, value: &'a str) -> Result<&mut Self, TokenizeError<'a>> {
+    fn set_attr_value(&mut self, value: &'a str) -> Result<&mut Self, TagAttrError<'a>> {
         if let Some(attr) = self.tag_attrs.last_mut() {
             if attr.value.is_some() {
-                Err(TokenizeError::TagAttrError(TagAttrError::ValueAlreadySet(
-                    attr.name,
-                )))
+                Err(TagAttrError::ValueAlreadySet(attr.name))
             } else {
                 attr.value = Some(value);
                 Ok(self)
             }
         } else {
-            Err(TokenizeError::TagAttrError(TagAttrError::AttrNotFound))
+            Err(TagAttrError::AttrNotFound)
         }
     }
 
@@ -732,20 +703,12 @@ impl<'a> Tokenizer<'a> {
             let tag_value = self.input.read_str(self.tag_value_span);
             self.tag_value_span = GrowingSpan::default();
 
-            if let Err(e) = self.open_tag_builder.set_attr_value(tag_value) {
-                match e {
-                    TokenizeError::TagAttrError(_) => {
-                        self.state = TokenizerState::Text;
-                        self.input.advance();
-                        return;
-                    }
-                    _ => {
-                        unreachable!("the error set_attr_value returns should be TagAttrError")
-                    }
-                }
+            if let Err(_) = self.open_tag_builder.set_attr_value(tag_value) {
+                self.state = TokenizerState::Text;
+                self.input.advance();
+            } else {
+                self.state = TokenizerState::AfterTagValue;
             }
-
-            self.state = TokenizerState::AfterTagValue;
         } else {
             self.tag_value_span.set(self.input.pos);
         }
