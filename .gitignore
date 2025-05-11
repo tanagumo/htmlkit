@@ -1,1 +1,52 @@
-/target
+# Cargo output
+/target/
+**/target/
+
+# Rust/Cargo metadata
+**/*.rs.bk
+**/*.rs.bk2
+Cargo.lock
+# Uncomment below if this is a library (not binary crate)
+# But in workspace root, you typically commit Cargo.lock
+# /Cargo.lock
+
+# By default, Cargo places build artifacts here
+/.cargo/
+/.cargo/
+
+# IDE/editor specific
+# VSCode
+.vscode/
+# JetBrains (CLion, IntelliJ Rust plugin)
+.idea/
+
+# MacOS / Linux
+.DS_Store
+*.swp
+*.swo
+*.swn
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Backup files
+*.bak
+*.tmp
+
+# Optional: coverage tools
+/coverage/
+/htmlcov/
+*.profraw
+*.profdata
+
+# Optional: test output logs, debug dumps
+/tests/output/
+debug.log
+
+# Optional: tracing dumps, flamegraphs
+/flamegraph/
+*.svg
+
