@@ -1,2 +1,2 @@
 mod tokenizer;
-pub use tokenizer::{OpenTag, Token, TokenStream, Tokenizer, WithSpan};
+pub use tokenizer::{Token, TokenStream, Tokenizer};
