@@ -5,6 +5,7 @@ use std::{
     iter::Peekable,
     mem,
     ops::{Deref, Range, RangeBounds},
+    slice::Iter,
     str::Chars,
     sync::OnceLock,
 };
@@ -355,6 +356,15 @@ impl<'a> Deref for TokenStream<'a> {
 
     fn deref(&self) -> &Self::Target {
         &*self.0
+    }
+}
+
+impl<'b, 'a: 'b> IntoIterator for &'b TokenStream<'a> {
+    type IntoIter = Iter<'b, WithSpan<Token<'a>>>;
+    type Item = &'b WithSpan<Token<'a>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 
